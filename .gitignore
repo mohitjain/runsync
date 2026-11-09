@@ -39,6 +39,10 @@ player/
 *.ogg
 *.m3u8
 
+# --- resolver output that belongs to the library, not the repo ---
+review.csv
+cache/
+
 # --- python / tooling ---
 .venv/
 __pycache__/

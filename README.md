@@ -9,8 +9,8 @@ See [PLAN.md](PLAN.md) for the build plan and locked decisions, [phase0-findings
 | Phase | Scope | State |
 |---|---|---|
 | 0 | Pre-work (tooling, Premium format check, card test) | Tooling and Premium check done; card test pending ([findings](phase0-findings.md)) |
-| 1 | Playlist discovery, fetch, diff, download to `master/` | Built and verified; awaiting the real-playlist checkpoint |
-| 2 | Metadata, language, covers | Not started |
+| 1 | Playlist discovery, fetch, diff, download to `master/` | Done; checkpoint passed on the real playlists (edge-case batch still to fix) |
+| 2a | Metadata, language, covers, tagged player copies, web-search enrichment via a Claude Code skill (no API key) | Built; awaiting the review checkpoint |
 | 3 | Dedupe | Not started |
 | 4 | Player build and safe sync to the card | Not started |
 | 5 | Status, doctor, launchd automation, full import | Not started |
@@ -49,18 +49,42 @@ If `cookies.txt` is missing or expired, `runsync` asks you to refresh it or cont
 
 ## Usage
 
-```
-uv run runsync playlists            # refresh from YouTube, tick the ones to sync, saved in the DB
-uv run runsync add-playlist <url>   # add a playlist that isn't in your account
+The interface is Claude Code skills. Open Claude Code in this repo and say what you want:
 
-uv run runsync sync --dry-run                 # what would change (nothing downloaded or removed)
-uv run runsync sync --dry-run --probe -n 20   # also ask YouTube each track's format, bitrate and size
-uv run runsync sync -n 5                      # download at most 5 tracks this run
-uv run runsync sync                           # fetch, trash removed tracks, download (default cap 50)
-uv run runsync sync -v                        # also print debug logs
+| Say | Skill | Does |
+|---|---|---|
+| "sync my music" | `runsync` | the whole flow, asking only at choice points |
+| "set up runsync" | `runsync-setup` | installs the tools, takes your cookie file, checks it |
+| "choose playlists" | `runsync-playlists` | lists them (✅ syncing), asks which to start or stop |
+| "enrich my library" | `runsync-enrich` | web-searches what the code could not settle |
+
+The skills drive four commands, which you can also run yourself:
+
+```
+uv run runsync playlists                       # numbered list: ✅ syncing, ⬜ not
+uv run runsync playlists --sync "1,Gym" --stop 3   # start/stop by number or name
+uv run runsync add-playlist <url>              # a playlist that isn't in your account
+
+uv run runsync sync --dry-run                  # what would change (nothing downloaded or removed)
+uv run runsync sync -n 5                       # download at most 5 tracks (default cap 50)
+uv run runsync resolve --dry-run               # preview the clean artist/title for each track
+uv run runsync resolve                         # tags, covers, ReplayGain, player copies
+uv run runsync resolve --redo                  # re-resolve every track (your corrections still win)
 ```
 
-Only one `sync` runs at a time. Every run checks the database against the files in `master/` (missing files are re-queued, stray files are reported, nothing is deleted).
+`resolve` turns upload titles like `Humari Adhuri Kahani - Full Song | Arijit Singh | ...` into clean tags. It tries, in order: YouTube's own music fields, the title parser, MusicBrainz, iTunes (India store). It stops at the first confident answer and never lets a lower-trust result replace a higher one. Tracks it is not sure about go to `review.csv` in the library: fill the `fix_*` columns and run `resolve` again; fixes are stored in `state.db` and always win. What the code cannot settle (no artist, unknown language) is also written to `enrich.csv`, which the `runsync-enrich` skill fills from a web search; `resolve` applies only answers with a source link and confidence of at least 0.85. Languages are Hindi, English or Punjabi only, and a track inherits its artist's. `master/` is never touched: tagged copies with a 500x500 cover and ReplayGain go to `player/m4a/` (Opus/other formats wait for Phase 4).
+
+### The flow
+
+1. Playlists (once): choose which to sync.
+2. `sync`: download new tracks to `master/`; removed ones go to `.trash/`.
+3. `resolve`: clean artist/title/album/year/language, cover and ReplayGain; build `player/m4a/<Title>.m4a`.
+4. Fix what is left: `review.csv` by hand, or the `runsync-enrich` skill.
+5. `resolve` again: applies the fixes and rebuilds only the tracks that changed.
+
+Rules of the player copies: only real AAC audio is copied (Opus, AC-3 and other masters wait for Phase 4); a title with letters that cannot go in a file name is held for review; the same song from two videos is copied once and the other is held for Phase 3 (dedupe); a second song with the same title is named `Title (Artist)`. Language comes from your override, then what the upload says (script or words like "Punjabi"), then the lead artist; if nothing says, it stays blank.
+
+Only one `sync` or `resolve` runs at a time. Every run checks the database against the files in `master/` (missing files are re-queued, stray files are reported, nothing is deleted).
 
 Only **selected** playlists are synced. A track leaves the library only when it is absent from every selected playlist.
 
@@ -72,6 +96,10 @@ Default location `~/Music/RunSync` (override with `RUNSYNC_HOME`):
 master/          untouched best audio stream per video ID
 .trash/          removed tracks, purged after 14 days
 state.db         SQLite state
+player/m4a/      tagged player copies (title-only plain-letter names), derived from master/
+enrich.csv       rows waiting for the runsync-enrich skill (web search)
+review.csv       tracks that need a human look
+cache/covers/    downloaded cover art
 config.yaml      optional overrides (cookies path, caps, thresholds)
 logs/last_run.log
 ```

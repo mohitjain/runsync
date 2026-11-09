@@ -19,6 +19,8 @@ class Config:
     mass_delete_threshold: float = 0.20
     trash_days: int = 14
     near_tie_ratio: float = 0.10  # bitrates within 10% count as a tie -> prefer a natively playable format
+    online: bool = True               # False = only offline resolver tiers
+    http_cache_days: int = 90
 
     @property
     def master(self) -> Path:
@@ -36,6 +38,22 @@ class Config:
     def log_path(self) -> Path:
         return self.library / "logs" / "last_run.log"
 
+    @property
+    def player(self) -> Path:
+        return self.library / "player"
+
+    @property
+    def cache(self) -> Path:
+        return self.library / "cache"
+
+    @property
+    def review_path(self) -> Path:
+        return self.library / "review.csv"
+
+    @property
+    def enrich_path(self) -> Path:
+        return self.library / "enrich.csv"
+
     def ensure_dirs(self) -> None:
         for p in (self.library, self.master, self.trash, self.log_path.parent):
             p.mkdir(parents=True, exist_ok=True)
@@ -50,7 +68,8 @@ def load_config(library: Path | None = None) -> Config:
         data = yaml.safe_load(path.read_text()) or {}
         if "cookies" in data:
             cfg.cookies = Path(data["cookies"]).expanduser()
-        for key in ("max_downloads_per_run", "pause_seconds", "mass_delete_threshold", "trash_days", "near_tie_ratio"):
+        for key in ("max_downloads_per_run", "pause_seconds", "mass_delete_threshold", "trash_days", "near_tie_ratio",
+                    "online", "http_cache_days"):
             if key in data:
                 setattr(cfg, key, data[key])
     return cfg

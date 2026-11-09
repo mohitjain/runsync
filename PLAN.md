@@ -17,10 +17,10 @@ One-stop tool: YouTube playlists → clean, tagged, best-quality music → synce
 | Player copy rule | M4A/AAC → copy as-is. Opus → decode to FLAC. No MP3 anywhere. |
 | Source selection | Highest bitrate wins; near tie (**within 10%**, was 5%) → prefer natively playable format (AAC over Opus). Prefer Topic/official-audio over video uploads. |
 | YouTube Premium | **Verified:** with cookies YouTube exposes AAC 258k (itag 141) and Opus ~257-275k (itag 774); anonymous max is AAC 130k. Not every upload has the high tier (regular uploads can top out at ~129k). Cookies come from a `cookies.txt` kept in the repo root, **gitignored** (`--cookies-from-browser` is blocked by macOS permissions; we declined Full Disk Access). Export it from an Incognito window (see README) or YouTube rotates the session. A JS challenge solver is required: `deno` + the `yt-dlp-ejs` package (installed via `yt-dlp[default]`). |
-| Naming | ASCII filenames `Artist - Title.ext`. Original script kept in custom tag. Identity = video ID in SQLite DB + custom tag, not filename. |
+| Naming | Plain-letter filenames, title only: `Title.ext` (`Title (Artist).ext` when two different songs share a title; same song twice is held as a duplicate for Phase 3). The uploaded title is kept in a custom tag. Identity = video ID in SQLite DB + custom tag, not filename. |
 | Tags | Cleaned title, artist, album, year, album artist, language, square 500x500 baseline JPEG cover, ReplayGain (no loudnorm re-encode). |
 | Metadata order | yt-dlp fields → title parsing → MusicBrainz + iTunes (`country=IN`) → LLM (description first, web search only if needed, DB-verified) → AcoustID → `review.csv`. `overrides.yaml` always wins. |
-| Languages | English, Hindi, Punjabi. Latin script on device; native script in custom tag. |
+| Languages | English, Hindi, Punjabi only. |
 | Language model | **Per artist**, not per song. Artist labelled once, tracks inherit. Occasional misses accepted. Multi-language artists store a list. |
 | Dedupe | In v1. Wrong merge is worse than a leftover duplicate. Never merge live/remix/cover/acoustic/instrumental/slowed-reverb into original. Losers kept as aliases, reversible. |
 | Retries | 3 retries per track per run, backoff 5s/30s/120s. Transient errors only. Permanent errors (private/deleted/blocked) → `unavailable`, keep existing file. |
@@ -81,12 +81,12 @@ devices:
 - [ ] Buy a 256 GB microSD (SanDisk/Samsung, trusted seller) and a USB-C card reader
 - [ ] Install: `brew install python uv ffmpeg chromaprint deno`
 - [ ] Confirm player model in About screen (listing says M0 Pro; photo screen read "M0 Pura")
-- [ ] **Card test** — put on the card: one Opus, one M4A, one FLAC; Devanagari title; Gurmukhi title; 500x500 embedded covers; a 150-track M3U8. Record what works.
+- [ ] **Card test** — put on the card: one Opus, one M4A, one FLAC; 500x500 embedded covers; a 150-track M3U8. Record what works.
 - [ ] **Premium format check** — `yt-dlp -F` on a test track with cookies; note highest AAC/Opus bitrates exposed
 - [ ] Create Anthropic API key, store in env var
 - [ ] Pick the card filesystem (exFAT for >32 GB); confirm player accepts it, else format in-player
 
-**Output:** `phase0-findings.md` — settles `native_script_tags`, card filesystem, Premium stream availability, M3U8 behaviour (>100 entries).
+**Output:** `phase0-findings.md` — settles card filesystem, Premium stream availability, M3U8 behaviour (>100 entries).
 
 **Gate:** do not start Phase 1 config until findings are recorded.
 
@@ -107,6 +107,15 @@ devices:
 > - **Self-heal** (same error on 3 tracks): updates yt-dlp once, then stops and asks for a re-run (not an in-run retry).
 > - **Politeness:** pause between downloads is 5 s (yt-dlp wiki advice for accounts).
 > - **Repo safety:** `scripts/check_sensitive.py` blocks cookies/databases/logs/secrets/audio by name *and* content; runs as a pre-commit hook and in CI (`.github/workflows/ci.yml`).
+
+> **Checkpoint run (2026-11-10, 85 tracks):** 107 downloaded, 0 failed, 0 corrupt, DB integrity ok, 7 unavailable (removed/blocked videos, correctly permanent). Log has only those expected errors.
+>
+> **Known follow-ups, to be fixed in one batch after the full library is downloaded:**
+> 1. `select_format` can pick a non-playable codec (one AC-3 384k surround stream was chosen over AAC 258k). Restrict candidates to AAC/ALAC/FLAC/Opus/MP3 and re-fetch affected tracks.
+> 2. yt-dlp's ANSI colour codes end up in `tracks.last_error`; strip them when storing.
+> 3. 6 masters are Opus/webm (YouTube offered nothing better for the upload); they get no player copy until Phase 4 decodes them to FLAC.
+> 4. About a quarter of uploads only offer ~129 kbps AAC (YouTube's tier for that upload, not a bug); consider flagging them in `status`.
+> 5. More cases will be appended here as the rest of the library downloads.
 
 **Goal:** playlists in, best-quality masters out, safely and resumably.
 
@@ -132,6 +141,17 @@ devices:
 
 ## Phase 2 — Metadata, language, covers
 
+> **Status: Phase 2a built (deterministic tiers + web-search enrichment via the `runsync-enrich` skill). No LLM key is used.**
+>
+> **Decisions made while building 2a:**
+> - `master/` is never modified. Resolved metadata lives in the DB (`metadata`, `artists`, `metadata_candidates`, `http_cache`); tags, cover and ReplayGain are embedded only in `player/m4a/` copies. Non-AAC masters get no copy until Phase 4.
+> - Trust order: override > youtube > musicbrainz > itunes > parser. A result never replaces a higher-trust one. `locked` rows are never rewritten.
+> - A lookup result is accepted only with a title match **plus** corroboration (the parsed artist, a singer named in the title, or a film name in the result's album). YouTube cuts are often shorter than album tracks, so duration is a small signal.
+> - Many credits (>3) collapse to the lead artist (Topic channel name when present); `&` inside an artist name is kept ("Above & Beyond").
+> - Standard library HTTP instead of `musicbrainzngs`; every lookup cached 90 days; failures are never cached.
+> - Review queue is `metadata.needs_review` + `review.csv` instead of a separate table.
+> - A title with letters that cannot go in a file name is held for review.
+
 **Goal:** clean tags and covers with minimal human review.
 
 **Build**
@@ -141,7 +161,7 @@ devices:
 4. Cover art: Cover Art Archive → iTunes fallback; square 500x500 baseline JPEG
 5. Artist table + per-artist language labelling; tracks inherit; new/ambiguous artists → review
 6. Tag writer (mutagen) for FLAC/M4A; custom tags: video_id, original_title, language
-7. Romanization for non-Latin titles (alias → LLM → review); ASCII filenames
+7. Plain-letter filenames
 8. `overrides.yaml` support (per track and per artist); `review.csv` generation
 9. ReplayGain tags via ffmpeg analysis (non-destructive)
 10. **Golden test set**: ~50 real junk titles with hand-written correct tags; runs on every change
@@ -223,7 +243,7 @@ devices:
 
 ## v2 (after v1 is trusted)
 
-- Lyrics: LRCLIB synced `.lrc` sidecars (same name as track, UTF-8), duration guard ±3 s, `no_lyrics` re-check after 30 days. Verify player renders Devanagari/Gurmukhi lyrics.
+- Lyrics: LRCLIB synced `.lrc` sidecars (same name as track, UTF-8), duration guard ±3 s, `no_lyrics` re-check after 30 days.
 - Interactive terminal review (`runsync review`, one-key accept of LLM guess), `runsync retag`
 - Non-song handling: hour-long mixes/DJ sets/podcasts flagged and skipped (optional chapter split)
 - Second device profile (wife: Hindi + Punjabi), then watch adapter
