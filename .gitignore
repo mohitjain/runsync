@@ -1,0 +1,57 @@
+# --- secrets & login sessions (NEVER commit) ---
+cookies*.txt
+*cookies*.txt
+.env
+.env.*
+*.pem
+*.key
+
+# --- state: SQLite databases, their journals, backups, locks ---
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.bak
+*.bak-*
+*.db.bak*
+.sync.lock
+
+# --- logs ---
+logs/
+*.log
+*.log.*
+
+# --- music library (lives in ~/Music/RunSync, but never in the repo) ---
+master/
+player/
+.trash/
+*.part
+*.m4a
+*.flac
+*.opus
+*.webm
+*.mp3
+*.wav
+*.ogg
+*.m3u8
+
+# --- python / tooling ---
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+# --- OS / editor ---
+.DS_Store
+._*
+.idea/
+.vscode/
