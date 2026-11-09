@@ -26,10 +26,9 @@ python 3.11, uv 0.13.7, ffmpeg/ffprobe, chromaprint (`fpcalc`), deno 2.9.8, yt-d
 
 ## PENDING (needs the card and player)
 - [ ] Confirm player model in About screen (M0 Pro vs "M0 Pura").
-- [ ] Card test: one Opus, one M4A, one FLAC; Devanagari title; Gurmukhi title; 500x500 covers; 150-track M3U8. Record what works.
+- [ ] Card test: one Opus, one M4A, one FLAC; 500x500 covers; 150-track M3U8. Record what works.
 - [ ] Card filesystem (exFAT for >32 GB); confirm the player accepts it.
-- [ ] Decide `native_script_tags` from the card test.
 - [ ] M3U8 behaviour over 100 entries.
 - [ ] Buy 256 GB microSD + USB-C reader.
 
-These gate **Phase 2 (tags/native script) and Phase 4 (sync)**, not Phase 1.
+These gate **Phase 4 (sync)**, not Phase 1.

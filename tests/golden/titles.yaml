@@ -1,0 +1,78 @@
+# Golden set: real upload titles from the first library download, with the tags a human would write.
+# Draft written by Claude, to be reviewed by the owner once. Rules:
+#   artists / title / album: ground truth (checked only when present)
+#   review: true  = offline resolver must NOT trust itself (no artist, or confidence < 0.75)
+#   xfail: known offline limit that online lookup (MusicBrainz) fixes; the test only reports it
+# yt: the music fields YouTube supplies for auto-generated uploads.
+- {raw: "Somewhere I Belong", channel: "Linkin Park", yt: {track: "Somewhere I Belong", artist: "Linkin Park", album: "Meteora", year: 2003}, expect: {artists: ["Linkin Park"], title: "Somewhere I Belong", album: "Meteora", year: 2003, review: false}}
+- {raw: "Say Na Say Na", channel: "Release - Topic", yt: {track: "Say Na Say Na", artist: "Aneela Mirza, Robert Uhlmarash, Johan Bejerholm", album: "Bluff Master", year: 2020}, expect: {artists: ["Aneela Mirza", "Robert Uhlmarash", "Johan Bejerholm"], title: "Say Na Say Na", album: "Bluff Master", review: false}}
+- {raw: "The Humma Song (From \"OK Jaanu\")", channel: "A. R. Rahman", yt: {track: "The Humma Song (From \"OK Jaanu\")", artist: "A.R. Rahman, Badshah, Tanishk Bagchi, Shashaa Tirupati, Jubin Nautiyal", album: "The Humma Song (From \"OK Jaanu\")", year: 2016}, expect: {artists: ["A.R. Rahman"], title: "The Humma Song", album: "OK Jaanu", review: false}}
+- {raw: "Hotel California (2013 Remaster)", channel: "Eagles", yt: {track: "Hotel California (2013 Remaster)", artist: "Eagles", album: "To the Limit: The Essential Collection", year: 1976}, expect: {artists: ["Eagles"], title: "Hotel California", year: 1976, versions: ["remaster"], review: false}}
+- {raw: "MAAHI VE", channel: "A. R. Rahman", yt: {track: "MAAHI VE", artist: "A.R. RAHMAN, IRSHAD KAMIL", album: "HIGHWAY", year: 2014}, expect: {artists: ["A.R. Rahman", "Irshad Kamil"], title: "Maahi Ve", album: "Highway", review: false}}
+- {raw: "OUTFIT", channel: "Guru Randhawa", yt: {track: "OUTFIT", artist: "GURU RANDHAWA, PREET HUNDAL, IKKA", album: "OUTFIT", year: 2015}, expect: {artists: ["Guru Randhawa", "Preet Hundal", "IKKA"], title: "Outfit", review: false}}
+- {raw: "Lahore", channel: "Guru Randhawa", yt: {track: "Lahore", artist: "Guru Randhawa, Guru Randhawa, Guru Randhawa", album: "Lahore", year: 2017}, expect: {artists: ["Guru Randhawa"], title: "Lahore", review: false}}
+- {raw: "Akhiyaan Gulaab", channel: "MITRAZ", yt: {track: "Akhiyaan Gulaab", artist: "Mitraz, Mitraz, Mitraz", album: "Teri Baaton Mein Aisa Uljha Jiya", year: 2024}, expect: {artists: ["Mitraz"], title: "Akhiyaan Gulaab", album: "Teri Baaton Mein Aisa Uljha Jiya", review: false}}
+- {raw: "Bamb", channel: "Sukhe", yt: {track: "Bamb", artist: "Sukh-E Muzical Doctorz, Badshah, Sukh-E Muzical Doctorz, Jaani, Badshah", album: "Bamb", year: 2018}, expect: {artists: ["Sukh-E Muzical Doctorz", "Badshah", "Jaani"], title: "Bamb", review: false}}
+- {raw: "MAST KALANDAR", channel: "Master Saleem - Topic", yt: {track: "MAST KALANDAR", artist: "SALEEM SHAHZADA, REHAN KHAN, SHANKAR MAHADEVAN, SAJID KHAN, SHANKAR-EHSAAN-LOY, SAMEER", album: "HEYY BABYY", year: 2007}, expect: {artists: ["Master Saleem"], title: "Mast Kalandar", album: "Heyy Babyy", review: false}}
+- {raw: "Titanium (feat. Sia)", channel: "David Guetta", yt: {track: "Titanium (feat. Sia)", artist: "David Guetta, Sia", album: "Nothing but the Beat", year: 2011}, expect: {artists: ["David Guetta", "Sia"], title: "Titanium", review: false}}
+- {raw: "Meter Down (club Remix)", channel: "ADNAN SAMI", yt: {track: "Meter Down (club Remix)", artist: "Adnan Sami, Backing Vocals", album: "Taxi No. 9211", year: 2020}, expect: {artists: ["Adnan Sami"], title: "Meter Down (club Remix)", versions: ["remix"], review: false}}
+- {raw: "Yun Hi Chala Chal", channel: "Udit Narayan", yt: {track: "Yun Hi Chala Chal", artist: "Udit Narayan, Hariharan, Kailash Kher, A.R. Rahman, Javed Akhtar", album: "Swades", year: 2004}, expect: {artists: ["Udit Narayan"], title: "Yun Hi Chala Chal", album: "Swades", review: false}}
+- {raw: "Don't Cry (Original)", channel: "Guns N' Roses", yt: {track: "Don't Cry (Original)", artist: "Guns N' Roses", album: "Use Your Illusion I", year: 1991}, expect: {artists: ["Guns N' Roses"], title: "Don't Cry (Original)", review: false}}
+- {raw: "Eye of the Tiger", channel: "Survivor Band", yt: {track: "Eye of the Tiger", artist: "Survivor", album: "Eye Of The Tiger", year: 1982}, expect: {artists: ["Survivor"], title: "Eye of the Tiger", review: false}}
+- {raw: "Love The Way You Lie", channel: "EminemMusic", yt: {track: "Love The Way You Lie", artist: "Eminem, Rihanna", album: "Curtain Call 2", year: 2010}, expect: {artists: ["Eminem", "Rihanna"], title: "Love The Way You Lie", review: false}}
+- {raw: "The Man Who Sold The World (Live)", channel: "Nirvana", yt: {track: "The Man Who Sold The World (Live)", artist: "Nirvana", album: "MTV Unplugged In New York", year: 1994}, expect: {artists: ["Nirvana"], title: "The Man Who Sold The World (Live)", versions: ["live"], review: false}}
+- {raw: "Senorita", channel: "Farhan Akhtar - Topic", yt: {track: "Senorita", artist: "Farhan Akhtar | Hrithik Roshan | Abhay Deol | Maria Del Mar Fernandez", album: "Zindagi Na Milegi Dobara", year: 2011}, expect: {artists: ["Farhan Akhtar"], title: "Senorita", album: "Zindagi Na Milegi Dobara", review: false}}
+- {raw: "Ude Dil Befikre (From \"Befikre\")", channel: "Vishal-Shekhar - Topic", yt: {track: "Ude Dil Befikre (From \"Befikre\")", artist: "Vishal and Sheykhar, Benny Dayal", album: "Befikre", year: 2016}, expect: {artists: ["Vishal and Sheykhar", "Benny Dayal"], title: "Ude Dil Befikre", album: "Befikre", review: false}}
+- {raw: "Ek Zindagi (From \"Angrezi Medium\")", channel: "Taniskaa Sanghvi - Topic", yt: {track: "Ek Zindagi (From \"Angrezi Medium\")", artist: "Taniskaa Sanghvi, Sachin-Jigar, Sachin-Jigar, Jigar Saraiya, Kumaar, Homi Adajania, Irrfan Khan", album: "Ek Zindagi (From \"Angrezi Medium\")", year: 2020}, expect: {artists: ["Taniskaa Sanghvi"], title: "Ek Zindagi", album: "Angrezi Medium", review: false}}
+- {raw: "Ae Dil Hai Mushkil Title Track (From \"Ae Dil Hai Mushkil\")", channel: "Arijit Singh", yt: {track: "Ae Dil Hai Mushkil Title Track (From \"Ae Dil Hai Mushkil\")", artist: "Pritam, Arijit Singh", album: "Yours Truly Arijit", year: 2016}, expect: {artists: ["Pritam", "Arijit Singh"], title: "Ae Dil Hai Mushkil Title Track", album: "Yours Truly Arijit", review: false}}
+- {raw: "Hall of Fame", channel: "The Script", yt: {track: "Hall of Fame", artist: "The Script, will.i.am", album: "Hall of Fame", year: 2012}, expect: {artists: ["The Script", "will.i.am"], title: "Hall of Fame", review: false}}
+- {raw: "Proper Patola (From \"Proper Patola\")", channel: "Diljit Dosanjh", yt: {track: "Proper Patola (From \"Proper Patola\")", artist: "Diljit Dosanjh, Badshah", album: "Proper Patola", year: 2013}, expect: {artists: ["Diljit Dosanjh", "Badshah"], title: "Proper Patola", album: "Proper Patola", review: false}}
+- {raw: "Hells Bells", channel: "AC/DC", yt: {track: "Hells Bells", artist: "AC/DC", album: "Back In Black", year: 1980}, expect: {artists: ["AC/DC"], title: "Hells Bells", year: 1980, review: false}}
+- {raw: "Peace of Mind", channel: "BOSTON", yt: {track: "Peace of Mind", artist: "Boston", album: "Boston", year: 1976}, expect: {artists: ["Boston"], title: "Peace of Mind", review: false}}
+- {raw: "The Cranberries - Zombie (Official Music Video)", channel: "TheCranberriesTV", expect: {artists: ["The Cranberries"], title: "Zombie", review: false}}
+- {raw: "Röyksopp & Robyn \"Monument\" (Music Video)", channel: "Creators", expect: {artists: ["Röyksopp & Robyn"], title: "Monument", review: false}}
+- {raw: "Naah -  Harrdy Sandhu Feat. Nora Fatehi | Jaani | B Praak | Official Music Video", channel: "Sony Music India", expect: {artists: ["Harrdy Sandhu", "Nora Fatehi"], title: "Naah", review: false}}
+- {raw: "Motorhead- Ace of Spades", channel: "Ronald Toro", expect: {artists: ["Motorhead"], title: "Ace of Spades", review: false}}
+- {raw: "Nickelback - How You Remind Me [OFFICIAL VIDEO]", channel: "Roadrunner Records", expect: {artists: ["Nickelback"], title: "How You Remind Me", review: false}}
+- {raw: "Metallica - The Unforgiven (Official Music Video)", channel: "Warner Records Vault", expect: {artists: ["Metallica"], title: "The Unforgiven", review: false}}
+- {raw: "Pearl Jam - Even Flow (Official Video)", channel: "Pearl Jam", expect: {artists: ["Pearl Jam"], title: "Even Flow", review: false}}
+- {raw: "Pitbull - Give Me Everything ft. Ne-Yo, Afrojack, Nayer", channel: "Pitbull", expect: {artists: ["Pitbull", "Ne-Yo", "Afrojack", "Nayer"], title: "Give Me Everything", review: false}}
+- {raw: "So High | Official Music Video | Sidhu Moose Wala ft. BYG BYRD | Humble Music", channel: "Humble Music", expect: {artists: ["Sidhu Moose Wala", "Byg Byrd"], title: "So High", review: true}}
+- {raw: "Game Of Thrones Theme Song (Rock Remix) - Our Last Night (GOT Rock Remix)", channel: "Our Last Night", expect: {artists: ["Our Last Night"], title: "Game Of Thrones Theme Song (Rock Remix)", versions: ["remix"], review: false}}
+- {raw: "Cold War Kids - So Tied Up ft. Bishop Briggs", channel: "Cold War Kids", expect: {artists: ["Cold War Kids", "Bishop Briggs"], title: "So Tied Up", review: false}}
+- {raw: "Rihanna - S&M", channel: "Rihanna", expect: {artists: ["Rihanna"], title: "S&M", review: false}}
+- {raw: "Andy Grammer \"Fine By Me\" Official Video", channel: "Andy Grammer", expect: {artists: ["Andy Grammer"], title: "Fine By Me", review: false}}
+- {raw: "Remember The Name (Official Video) - Fort Minor [4K]", channel: "Fort Minor", expect: {artists: ["Fort Minor"], title: "Remember The Name", review: false}}
+- {raw: "Breaking the Habit (Official Music Video) [HD UPGRADE] – Linkin Park", channel: "Linkin Park", expect: {artists: ["Linkin Park"], title: "Breaking the Habit", review: false}}
+- {raw: "Guns N' Roses - Don't Cry", channel: "Guns N' Roses", expect: {artists: ["Guns N' Roses"], title: "Don't Cry", review: false}}
+- {raw: "3 Doors Down - Here Without You (Official Music Video)", channel: "3doorsdown", expect: {artists: ["3 Doors Down"], title: "Here Without You", review: false}}
+- {raw: "Above & Beyond - Sun & Moon HD ( ASOT500 @ Den Bosch )", channel: "Richard", expect: {artists: ["Above & Beyond"], title: "Sun & Moon", versions: ["live"], review: false}}
+- {raw: "Mar Jayian - Vicky Donor | A beautiful song by  Vishal Dadlani & Sunidhi Chauhan {full song}", channel: "BasEkSoch", expect: {artists: ["Vishal Dadlani", "Sunidhi Chauhan"], title: "Mar Jayian", album: "Vicky Donor", review: false}}
+- {raw: "Humko Sirf Tumse Pyaar Hai Cover Song by Rahul Jain | Bollywood Cover Song | Unplugged Cover Songs", channel: "Volume", expect: {artists: ["Rahul Jain"], title: "Humko Sirf Tumse Pyaar Hai", versions: ["cover", "unplugged"], review: false}}
+# --- offline cannot know the artist: must go to review, but the title must still be cleaned ---
+- {raw: "OFFICIAL: 'Mitti Di Khushboo' FULL VIDEO Song | Ayushmann Khurrana | Rochak Kohli", channel: "T-Series", expect: {title: "Mitti Di Khushboo", review: true}}
+- {raw: "Hardy Sandhu: HORNN BLOW Video Song | Jaani | B Praak | New Song 2016 | T-Series", channel: "T-Series", expect: {title: "Hornn Blow", review: true}}
+- {raw: "Dil Diyan Gallan Full Song | Tiger Zinda Hai | Salman Khan, Katrina Kaif, Atif Aslam, Vishal-Shekhar", channel: "YRF", expect: {title: "Dil Diyan Gallan", review: true}}
+- {raw: "5 Taara (Full Song) | Diljit Dosanjh | Jatinder Shah | Superhit Punjabi Song | Speed Records", channel: "Speed Records", expect: {title: "5 Taara", review: true}}
+- {raw: "Blue Eyes Full Video Song Yo Yo Honey Singh | Blockbuster Song Of 2013", channel: "T-Series", expect: {title: "Blue Eyes", review: true}}
+- {raw: "SAKHIYAAN (Full Song) Maninder Buttar | MixSingh | Babbu | Punjabi Songs | Sakhiyan | Ishtar Punjabi", channel: "Ishtar Punjabi", expect: {title: "Sakhiyaan", review: true}}
+- {raw: "\"Tum Hi Ho\" Aashiqui 2 Full Song With Lyrics | Aditya Roy Kapur, Shraddha Kapoor", channel: "T-Series", expect: {title: "Tum Hi Ho", album: "Aashiqui 2", review: true}}
+- {raw: "Luka Chuppi: Duniyaa Full Video Song | Kartik Aaryan Kriti Sanon | Akhil | Dhvani B", channel: "T-Series", expect: {title: "Duniyaa", review: true}}
+- {raw: "Wakhra Swag | Official Video | Badshah | Navv Inder | Best Punjabi Dance Song | Punjabi Song 2026", channel: "Times Music", expect: {title: "Wakhra Swag", review: true}}
+- {raw: "'Gallan Goodiyaan' Full VIDEO Song | Dil Dhadakne Do | T-Series", channel: "T-Series", expect: {title: "Gallan Goodiyaan", review: true}}
+- {raw: "Bapu Zimidar | Jassie Gill | Replay ( Return Of Melody ) |  Latest Punjabi Songs | New Punjabi Songs", channel: "Speed Records", expect: {title: "Bapu Zimidar", review: true}}
+- {raw: "Janam Janam – Dilwale | Shah Rukh Khan | Kajol | Pritam | SRK | Kajol | Lyric Video 2015", channel: "Sony Music India", expect: {title: "Janam Janam", album: "Dilwale", review: true}}
+- {raw: "Humari Adhuri Kahani - Full Song | Arijit Singh | Emraan Hashmi, Vidya Balan | Jeet Gannguli", channel: "Sony Music India", expect: {title: "Humari Adhuri Kahani", review: true}}
+- {raw: "Hairat Full Video | Anjaana Anjaani | Ranbir Kapoor, Priyanka Chopra | Lucky Ali | Vishal - Shekhar", channel: "T-Series", expect: {title: "Hairat", review: true}}
+- {raw: "Hasi (Female) Lyrics | Shreya Ghoshal | Hamari Adhuri Kahani", channel: "Superhit Music", expect: {title: "Hasi (Female)", review: true}}
+- {raw: "Enna Sona - Official Music Video | OK Jaanu | Arijit Singh | Shraddha Kapoor | Aditya Roy Kapoor", channel: "Sony Music India", expect: {title: "Enna Sona", review: true}}
+- {raw: "Bulleya Full Video - ADHM | Ranbir, Aishwarya | Amit Mishra, Shilpa Rao | Pritam | Karan Johar", channel: "Sony Music India", expect: {title: "Bulleya", review: true}}
+- {raw: "Na Ja - Pav Dharia (Official Video) | 4K Video | Dance Hit | Punjabi Songs | #pavdharia  #najanaja", channel: "Ishtar Punjabi", expect: {title: "Na Ja", review: true}}
+- {raw: "Jimmy Choo Choo : Guri (Official Video) Ft Ikka | Jaani | B Praak | Arvindr Khaira | Geet MP3", channel: "Geet MP3", expect: {title: "Guri", review: true}}
+- {raw: "Guru Randhawa: Lahore (Official Video) Bhushan Kumar | Vee | DirectorGifty | T-Series", channel: "T-Series", expect: {title: "Lahore", review: true}}
+- {raw: "Dil Ne Tumko Chun Liya Hai -Best Love Song", channel: "Gully Boy PKG", expect: {title: "Dil Ne Tumko Chun Liya Hai", review: true}}
+- {raw: "Kolaveri Di featuring Nevaan Nigam", channel: "Madhurima Nigam", expect: {title: "Kolaveri Di", review: true}}
+- {raw: "IIT Delhi Performs in Gargi College_2012", channel: "Parth Nyati", expect: {review: true}}
+# --- known offline limits: MusicBrainz settles these when online ---
+- {raw: "Chaska Hai Yaara Nu - Yo Yo Honey Singh #YoYoHoneySingh #MrPangeBaaz", channel: "Mr. Pange Baaz", xfail: "'Song - Artist' order is indistinguishable from 'Artist - Song' offline", expect: {artists: ["Yo Yo Honey Singh"], title: "Chaska Hai Yaara Nu", review: true}}
+- {raw: "OK Go, The One Moment", channel: "Anthony Miller", xfail: "artist embedded in a comma title", expect: {artists: ["OK Go"], title: "The One Moment", review: true}}

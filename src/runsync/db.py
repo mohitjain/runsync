@@ -101,6 +101,73 @@ MIGRATIONS = [
     );
     CREATE INDEX idx_track_events_video ON track_events(video_id, at);
     """,
+    # --- v3: resolved metadata (Phase 2a) --------------------------------
+    """
+    CREATE TABLE metadata (
+        video_id TEXT PRIMARY KEY REFERENCES tracks(video_id) ON DELETE CASCADE,
+        artist TEXT,                 -- display artist(s), "A, B"
+        artists_json TEXT,           -- JSON list, primary first
+        album_artist TEXT,
+        title TEXT,
+        album TEXT,
+        year INTEGER,
+        language TEXT,               -- primary language
+        languages_json TEXT,
+        versions_json TEXT,          -- live / remix / remaster ... (Phase 3 uses these)
+        original_title TEXT,         -- as uploaded
+        confidence REAL,
+        source_tier TEXT,            -- override | youtube | musicbrainz | itunes | parser
+        locked INTEGER NOT NULL DEFAULT 0,   -- 1 = came from an override, never overwritten
+        needs_review INTEGER NOT NULL DEFAULT 0,
+        review_reason TEXT,
+        mb_recording_id TEXT,
+        mb_release_id TEXT,
+        cover_path TEXT,
+        cover_source TEXT,           -- coverartarchive | itunes | youtube
+        replaygain_gain_db REAL,
+        replaygain_peak REAL,
+        loudness_lufs REAL,
+        resolved_at TEXT
+    );
+    CREATE TABLE metadata_candidates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        video_id TEXT NOT NULL,
+        at TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        artist TEXT, title TEXT, album TEXT, year INTEGER,
+        confidence REAL,
+        detail TEXT                  -- JSON
+    );
+    CREATE INDEX idx_candidates_video ON metadata_candidates(video_id, at);
+    CREATE TABLE artists (
+        name TEXT PRIMARY KEY,       -- canonical display name
+        key TEXT NOT NULL,           -- normalised comparison key
+        languages_json TEXT,
+        confidence REAL,
+        source TEXT,                 -- override | itunes_genre | musicbrainz_country | unknown
+        country TEXT,
+        genre TEXT,
+        updated_at TEXT
+    );
+    CREATE UNIQUE INDEX idx_artists_key ON artists(key);
+    CREATE TABLE http_cache (
+        key TEXT PRIMARY KEY,        -- full request URL
+        body TEXT NOT NULL,
+        fetched_at TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE overrides (
+        kind TEXT NOT NULL,          -- track | artist
+        key TEXT NOT NULL,           -- video id, or artist name
+        fields_json TEXT NOT NULL,   -- track: artist/title/album/year/language; artist: languages
+        source TEXT NOT NULL,        -- human | search
+        evidence TEXT,
+        confidence REAL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (kind, key)
+    );
+    """,
 ]
 
 
@@ -133,7 +200,7 @@ def log_event(conn: sqlite3.Connection, video_id: str, event: str, detail: dict 
     import json
     from datetime import UTC, datetime
     conn.execute("INSERT INTO track_events (video_id, at, event, detail) VALUES (?, ?, ?, ?)",
-                 (video_id, datetime.now(UTC).isoformat(timespec="seconds"), event,
+                 (video_id, datetime.now(UTC).isoformat(timespec="microseconds"), event,
                   json.dumps(detail, default=str) if detail else None))
 
 
