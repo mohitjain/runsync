@@ -1,0 +1,21 @@
+# Local-only hooks (no network fetches). Install once:  uv run pre-commit install
+repos:
+  - repo: local
+    hooks:
+      - id: no-sensitive-files
+        name: block cookies / databases / logs / secrets / audio
+        entry: python3 scripts/check_sensitive.py
+        language: system
+        pass_filenames: true
+        always_run: false
+      - id: ruff
+        name: ruff
+        entry: uv run ruff check
+        language: system
+        types: [python]
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

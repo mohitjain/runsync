@@ -1,0 +1,36 @@
+[project]
+name = "runsync"
+version = "0.1.0"
+description = "Mirror YouTube playlists to a microSD MP3 player: best-quality audio, clean tags, safe sync."
+readme = "README.md"
+license = "Unlicense"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Mohit Jain", email = "jain.mohit27@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "mutagen>=1.48.1",
+    "pyyaml>=6.0.3",
+    "questionary>=2.1.1",
+    "rich>=15.0.0",
+    "typer>=0.28.0",
+    "yt-dlp[default]>=2026.10.26",
+]
+
+[project.scripts]
+runsync = "runsync.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.7.0",
+    "pytest>=9.2.0",
+    "ruff>=0.17.4",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
