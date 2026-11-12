@@ -256,3 +256,35 @@ def test_a_player_file_that_belongs_to_another_track_is_never_deleted(cfg):
     conn.execute("UPDATE tracks SET player_path = ? WHERE video_id = 'lose'", (str(winners_copy["path"]),))
     apply_plan(cfg, conn, plan(conn))
     assert winners_copy["path"].exists()
+
+
+def test_apply_needs_the_id_of_the_exact_plan_and_nothing_is_deleted_otherwise(cfg, monkeypatch):
+    from typer.testing import CliRunner
+
+    from runsync import cli
+    from runsync.dedupe import plan_id
+    conn = db.connect(cfg.db_path)
+    two(conn, cfg)
+    monkeypatch.setenv("RUNSYNC_HOME", str(cfg.library))
+    monkeypatch.setattr(cli, "build_plan", lambda c: plan(c))
+    run = CliRunner().invoke
+    pid = plan_id(plan(conn))
+    for args in (["--apply"], ["--apply", "--confirm", "wrongplan123"], ["--apply", "--confirm", ""]):
+        out = run(cli.app, ["dedupe", *args])
+        assert out.exit_code == 2 and "Not confirmed" in out.output
+        assert (cfg.master / "lose.m4a").exists()
+    assert run(cli.app, ["dedupe", "--apply", "--confirm", pid]).exit_code == 0
+    assert not (cfg.master / "lose.m4a").exists() and (cfg.master / "keep.m4a").exists()
+
+
+def test_plan_id_changes_when_the_plan_changes(conn, tmp_path):
+    from runsync.dedupe import plan_id
+    track(conn, tmp_path, "a", BASE, channel="Avicii - Topic")
+    track(conn, tmp_path, "b", BASE)
+    meta(conn, "a")
+    meta(conn, "b")
+    first = plan_id(plan(conn))
+    assert first == plan_id(plan(conn)) and len(first) == 12
+    track(conn, tmp_path, "c", BASE)
+    meta(conn, "c")
+    assert plan_id(plan(conn)) != first

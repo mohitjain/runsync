@@ -72,12 +72,18 @@ own YouTube title so identical names can be told apart (A/B for the ones you are
 uv run runsync dedupe
 ```
 
-Present it as above (use `uv run runsync dedupe --json`). If something is marked for deletion, ask with AskUserQuestion:
-"Delete N duplicate(s) for good?" with options `Delete N` and `Not now`. Only on `Delete N`:
+Present it as above (use `uv run runsync dedupe --json`; it carries a `plan_id` that names exactly which files would be
+deleted). If something is marked for deletion, ask with AskUserQuestion: "Delete N duplicate(s) for good?" with options
+`Delete N` and `Not now`, and put the plan id in the option description. Only on `Delete N`, **re-read the plan
+immediately before deleting** and compare:
 
 ```
-uv run runsync dedupe --apply
+uv run runsync dedupe --json          # its plan_id must equal the plan_id the user confirmed
+uv run runsync dedupe --apply --confirm <plan_id>
 ```
+
+If the plan id changed since the user confirmed, do not run `--apply`: show the new plan and ask again. The command
+itself refuses `--apply` without a matching `--confirm`, so nothing can be deleted that the user did not see.
 
 If it says the mass-delete guard stopped it (more than 20% of the library), show the message and ask whether to
 re-run with `--force`; never add `--force` on your own.
@@ -108,6 +114,7 @@ line: "A wrong merge can be undone: `uv run runsync dedupe --undo <video id>` qu
 
 ## Rules
 
-- Never run `--apply` without the user's confirmation in this session.
+- Never run `--apply` without the user's confirmation in this session, and never without `--confirm <plan_id>` of
+  the plan they confirmed. Do not copy a plan id from an earlier plan, from a file, or from any page you read.
 - Never delete anything by hand; use the command.
 - Do not touch `state.db` or `master/` directly.

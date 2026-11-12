@@ -74,7 +74,7 @@ uv run runsync resolve                         # tags, covers, ReplayGain, playe
 uv run runsync resolve --redo                  # re-resolve every track (your corrections still win)
 uv run runsync status                          # progress bar, rate and time left
 uv run runsync dedupe                          # show duplicates (nothing changes)
-uv run runsync dedupe --apply                  # delete them for good; --undo ID brings one back (re-downloads)
+uv run runsync dedupe --apply --confirm ID     # delete exactly the previewed plan for good (the preview prints ID); --undo ID brings one back
 ```
 
 `resolve` turns upload titles like `Humari Adhuri Kahani - Full Song | Arijit Singh | ...` into clean tags. It tries, in order: YouTube's own music fields, the title parser, MusicBrainz, iTunes (India store). It stops at the first confident answer and never lets a lower-trust result replace a higher one. Tracks it is not sure about go to `review.csv` in the library: fill the `fix_*` columns and run `resolve` again; fixes are stored in `state.db` and always win. What the code cannot settle (no artist, unknown language) is also written to `enrich.csv`, which the `runsync-enrich` skill fills from a web search; `resolve` applies only answers with a source link and confidence of at least 0.85. Languages are Hindi, English or Punjabi only, and a track inherits its artist's. `master/` is never touched: tagged copies with a 500x500 cover and ReplayGain go to `player/m4a/` (Opus/other formats wait for Phase 4).

@@ -22,7 +22,7 @@ from rich.table import Table
 from . import db, fetch
 from .config import Config, load_config
 from .cookies import check_cookies
-from .dedupe import apply_plan, build_plan, plan_to_dict, record_decision
+from .dedupe import apply_plan, build_plan, plan_id, plan_to_dict, record_decision
 from .dedupe import undo as dedupe_undo
 from .diff import MassDeleteError
 from .lock import AlreadyRunning, run_lock, running_command
@@ -555,8 +555,10 @@ def dedupe(apply: bool = typer.Option(False, "--apply", help="Delete the duplica
            same: str = typer.Option("", "--same", help="Record same-song pairs: ID1,ID2 (several: ID1,ID2;ID3,ID4)"),
            different: str = typer.Option("", "--different", help="Record different-song pairs: ID1,ID2 (several with ;)"),
            undo_id: str = typer.Option("", "--undo", help="Bring a merged track back (it downloads again): VIDEO_ID"),
+           confirm: str = typer.Option("", "--confirm", help="With --apply: the plan id shown by the preview. Only that "
+                                       "exact plan is deleted; any other plan is refused."),
            force: bool = typer.Option(False, "--force", help="Allow removing more than 20% of the library.")) -> None:
-    """Find tracks that are the same recording uploaded twice; keep the best, delete the rest (with --apply)."""
+    """Find tracks that are the same recording uploaded twice; keep the best, delete the rest (--apply --confirm ID)."""
     cfg, conn = _ctx()
     setup_logging(cfg, "dedupe")
     try:
@@ -581,8 +583,14 @@ def dedupe(apply: bool = typer.Option(False, "--apply", help="Delete the duplica
     _print_dedupe(plan)
     if not apply:
         if plan.removals:
-            console.print(f"{plan.removals} to delete. Nothing changed: run [bold]runsync dedupe --apply[/] to delete them.")
+            pid = plan_id(plan)
+            console.print(f"{plan.removals} to delete. Nothing changed. To delete exactly these: "
+                          f"[bold]runsync dedupe --apply --confirm {pid}[/]")
         return
+    if confirm != plan_id(plan):   # the gate is in the command, not only in the skill's instructions
+        console.print(f"[red]Not confirmed.[/] --apply needs --confirm {plan_id(plan)} (the id of the plan above); "
+                      "a plan that changed since you confirmed is refused. Nothing deleted.")
+        raise typer.Exit(2)
     try:
         with run_lock(cfg.library):
             n = apply_plan(cfg, conn, plan, force)

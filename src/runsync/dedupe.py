@@ -9,6 +9,7 @@ Removal is permanent: the loser's master and player copy are deleted. An alias r
 undoable (undo queues the loser for download again)."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import sqlite3
@@ -234,11 +235,18 @@ def build_plan(conn: sqlite3.Connection, fp_fn: Callable[[str, Path, str | None]
     return plan
 
 
+def plan_id(plan: Plan) -> str:
+    """Names exactly which files a plan would delete. `--apply` only runs with the id of the plan the owner confirmed,
+    so a plan that changed in between (or an unconfirmed run) deletes nothing."""
+    pairs = sorted(f"{g.winner.video_id}>{m.video_id}" for g in plan.groups for m, _ in g.losers)
+    return hashlib.sha256("\n".join(pairs).encode()).hexdigest()[:12]
+
+
 def plan_to_dict(plan: Plan) -> dict:
     def mem(m: Member) -> dict:
         return {"id": m.video_id, "label": m.label(), "channel": m.channel, "kbps": round(m.kbps), "codec": m.codec,
                 "seconds": round(m.seconds), "youtube_title": m.youtube_title}
-    return {"remove": [{"keep": mem(g.winner), "remove": mem(m), "similarity": s}
+    return {"plan_id": plan_id(plan), "remove": [{"keep": mem(g.winner), "remove": mem(m), "similarity": s}
                        for g in plan.groups for m, s in g.losers],
             "unsure": [{"a": mem(u.a), "b": mem(u.b), "similarity": u.similarity} for u in plan.unsure]}
 
