@@ -17,6 +17,14 @@ def make_m4a(path: Path, seconds: float = 2.0) -> Path:
     return path
 
 
+def make_audio(path: Path, codec: str, seconds: float = 2.0) -> Path:
+    """A short sine tone in any codec/container ffmpeg can write (libopus in .webm, ac3 in .m4a ...)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    f"sine=frequency=440:duration={seconds}", "-c:a", codec, str(path)], check=True)
+    return path
+
+
 def add_track(conn, vid: str, master: Path | None = None, **cols) -> None:
     defaults = {"original_title": vid, "title": vid, "channel": "Chan", "status": "downloaded",
                 "master_path": str(master) if master else None, "downloaded_at": "2026-01-01T00:00:00+00:00"}

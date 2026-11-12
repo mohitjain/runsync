@@ -629,7 +629,7 @@ def status(json_out: bool = typer.Option(False, "--json", help="Facts as JSON (f
     need_you = conn.execute("SELECT COUNT(*) FROM metadata WHERE needs_review = 1").fetchone()[0]
     copies = conn.execute("SELECT COUNT(*) FROM tracks WHERE player_path IS NOT NULL").fetchone()[0]
     copies_target = conn.execute("SELECT COUNT(*) FROM tracks t JOIN metadata m USING (video_id) WHERE "
-                                 "t.status = 'downloaded' AND t.probe_codec = 'aac' AND m.needs_review = 0").fetchone()[0]
+                                 "t.status = 'downloaded' AND m.needs_review = 0").fetchone()[0]
     activity = {"sync": "downloading", "resolve": "tagging", "dedupe": "deduping"}.get(command or "", "")
     if command == "unknown":
         activity = "working"

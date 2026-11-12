@@ -1,6 +1,7 @@
 import json
 import subprocess
 
+import pytest
 from conftest import make_m4a, needs_ffmpeg
 from mutagen.mp4 import MP4
 
@@ -133,3 +134,46 @@ def test_m4a_that_does_not_hold_aac_is_not_copied(tmp_path):
     out = build_player_copy(ac3, tmp_path / "p", "v1", {"artist": "A", "title": "T"}, None)
     assert "ac3" in out["skipped"] and "Phase 4" in out["skipped"]
     assert not list((tmp_path / "p").glob("*.m4a"))
+
+
+def _cover(path):
+    subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=500x500",
+                    "-frames:v", "1", "-pix_fmt", "yuvj420p", str(path)], check=True)
+    return path
+
+
+@needs_ffmpeg
+@pytest.mark.parametrize("codec,name", [("libopus", "o.webm"), ("ac3", "a.m4a")])
+def test_non_aac_masters_become_tagged_flac_and_the_master_is_untouched(tmp_path, codec, name):
+    import hashlib
+
+    from conftest import make_audio
+    from mutagen.flac import FLAC
+
+    from runsync.download import probe
+    master = make_audio(tmp_path / name, codec)
+    before = hashlib.sha256(master.read_bytes()).hexdigest()
+    meta = {"artist": "Avicii", "title": "Wake Me Up", "album": "True", "year": 2013, "language": "english",
+            "original_title": "Avicii - Wake Me Up (Official Video)", "replaygain_gain_db": -9.5, "replaygain_peak": 0.98}
+    out = build_player_copy(master, tmp_path / "m4a", "vid1", meta, _cover(tmp_path / "c.jpg"), flac_dir=tmp_path / "flac")
+    assert out["format"] == "flac" and out["filename"] == "Wake Me Up.flac" and out["path"].exists()
+    f = FLAC(out["path"])
+    assert (f["title"], f["artist"], f["album"], f["date"], f["VIDEO_ID"], f["LANGUAGE"]) == (
+        ["Wake Me Up"], ["Avicii"], ["True"], ["2013"], ["vid1"], ["english"])
+    assert f["REPLAYGAIN_TRACK_GAIN"] == ["-9.50 dB"] and f["ORIGINAL_TITLE"]
+    assert len(f.pictures) == 1 and f.pictures[0].data[:2] == b"\xff\xd8" and (f.pictures[0].width, f.pictures[0].height) == (500, 500)
+    assert abs(probe(out["path"])["duration_s"] - 2.0) < 0.5 and probe(out["path"])["codec"] == "flac"
+    assert hashlib.sha256(master.read_bytes()).hexdigest() == before
+    assert not list((tmp_path / "flac" / ".tmp").glob("*"))
+
+
+@needs_ffmpeg
+def test_flac_and_m4a_copies_never_share_a_name_across_tracks(tmp_path):
+    from conftest import make_audio
+    aac = make_m4a(tmp_path / "a.m4a")
+    opus = make_audio(tmp_path / "o.webm", "libopus")
+    one = build_player_copy(aac, tmp_path / "m4a", "v1", {"artist": "A", "title": "Song"}, None, flac_dir=tmp_path / "flac")
+    two = build_player_copy(opus, tmp_path / "m4a", "v2", {"artist": "B", "title": "Song"}, None, flac_dir=tmp_path / "flac")
+    same = build_player_copy(opus, tmp_path / "m4a", "v3", {"artist": "A", "title": "Song"}, None, flac_dir=tmp_path / "flac")
+    assert one["filename"] == "Song.m4a" and two["filename"] == "Song (B).flac"
+    assert "duplicate" in same["skipped"]
