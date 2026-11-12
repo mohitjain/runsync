@@ -141,9 +141,10 @@ class _Catcher(http.server.BaseHTTPRequestHandler):
 
 
 def login(client_path: Path, token_path: Path, open_browser: Callable[[str], object] = webbrowser.open,
-          post_form: Callable[[str, dict], dict] = _post_form, timeout: float = 300,
+          post_form: Callable[[str, dict], dict] | None = None, timeout: float = 300,
           clock: Callable[[], float] = time.time, announce: Callable[[str], None] = lambda url: None) -> dict:
     """Sign in once in the browser. Returns the saved token (never print it)."""
+    post_form = post_form or _post_form
     client_id, client_secret = load_client(client_path)
     verifier, challenge = make_pkce()
     state = secrets.token_urlsafe(16)
@@ -206,11 +207,12 @@ class Api:
     """Authenticated calls to googleapis.com. `transport` and `post_form` are injectable for tests."""
 
     def __init__(self, token_path: Path, client_path: Path, conn: sqlite3.Connection | None = None,
-                 budget: int = 8000, transport: Callable = _http, post_form: Callable = _post_form,
+                 budget: int = 8000, transport: Callable | None = None, post_form: Callable | None = None,
                  clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep,
                  retry_delays: tuple[float, ...] = (2, 10)) -> None:
         self.token_path, self.client_path, self.conn, self.budget = Path(token_path), Path(client_path), conn, budget
-        self.transport, self.post_form, self.clock, self.sleep, self.retry_delays = transport, post_form, clock, sleep, retry_delays
+        self.transport, self.post_form = transport or _http, post_form or _post_form   # looked up at call time (tests patch them)
+        self.clock, self.sleep, self.retry_delays = clock, sleep, retry_delays
         self._token: dict | None = None
 
     # -- auth

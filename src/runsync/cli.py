@@ -21,7 +21,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import db, fetch
+from . import db, fetch, ytclean
 from . import youtube as yt
 from .card import (
     apply_card_plan,
@@ -819,14 +819,29 @@ def card(register: str = typer.Option("", "--register", help="Mount path of a ca
 
 @app.command()
 def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTube in your browser (once)."),
+            cleanup: bool = typer.Option(False, "--cleanup", help="Preview removing repeats and merged duplicates from "
+                                         "your YouTube playlists (nothing changes)."),
+            apply: bool = typer.Option(False, "--apply", help="Run the cleanup (needs --confirm)."),
+            confirm: str = typer.Option("", "--confirm", help="With --apply: the plan id shown by the preview. Only that "
+                                        "exact plan runs; any other is refused."),
+            batch: int = typer.Option(ytclean.DEFAULT_BATCH, "--batch", help="With --apply: most operations per run."),
+            undo: bool = typer.Option(False, "--undo", help="Reverse the last cleanup run."),
             json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
-    """Show the YouTube API login, today's quota and your playlists. --login signs in."""
+    """Show the YouTube API login, today's quota and your playlists. --login signs in; --cleanup previews the cleanup."""
     console.stderr = json_out
     cfg, conn = _ctx()
     setup_logging(cfg, "youtube")
     api = yt.Api(cfg.youtube_token, cfg.youtube_client, conn, cfg.youtube_budget)
     facts: dict = {"client_file": cfg.youtube_client.exists(), "logged_in": api.logged_in(),
                    "budget": cfg.youtube_budget, "units_today": api.units_today()}
+
+    def fail(message: str, code: int = 2):
+        facts["error"] = message
+        console.print(f"[red]{_esc(message)}[/]")
+        if json_out:
+            sys.stdout.write(json.dumps(facts) + "\n")
+        raise typer.Exit(code)
+
     try:
         if login:
             if not cfg.youtube_client.exists():
@@ -836,17 +851,46 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                      announce=lambda m: console.print(f"\U0001f310 {_esc(m)}"))
             facts["logged_in"] = True
             console.print("\u2705 Signed in. The login is saved in youtube_token.json (owner-only, git-ignored).")
-        if facts["logged_in"]:
+        if (cleanup or apply or undo) and not facts["logged_in"]:
+            raise yt.AuthError(f"Not signed in to YouTube. {yt.LOGIN_HINT}")
+        if apply and not cleanup:
+            cleanup = True
+        if cleanup or undo:
+            with run_lock(cfg.library) if (apply or undo) else nullcontext():
+                if undo:
+                    r = ytclean.undo_last_run(api, conn)
+                    facts["undone"] = {"restored": r.restored, "removed": r.removed, "left": r.left, "stopped": r.stopped}
+                    console.print(f"\u21a9\ufe0f Undid the last cleanup: {r.restored} put back, {r.removed} taken out"
+                                  + (f", {r.left} left ({_esc(r.stopped)})" if r.left else "."))
+                else:
+                    plan = ytclean.build_plan(api, conn)
+                    facts["cleanup"] = {**ytclean.summary(plan), "days": ytclean.days_needed(plan, cfg.youtube_budget),
+                                        "batch": batch,
+                                        "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
+                                                   "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id}
+                                                  for o in plan.ops]}
+                    if apply:
+                        r = ytclean.apply_plan(api, conn, plan, confirm, batch)
+                        facts["applied"] = {"deleted": r.deleted, "added": r.added, "left": r.left, "stopped": r.stopped}
+                        console.print(f"\u2705 Cleaned: {r.deleted} removed, {r.added} added, {r.left} still to do"
+                                      + (f" ({_esc(r.stopped)})" if r.stopped else "."))
+            facts["units_today"] = api.units_today()
+        elif facts["logged_in"]:
             facts["playlists"] = yt.my_playlists(api)
             facts["units_today"] = api.units_today()
+    except AlreadyRunning as exc:
+        fail(str(exc), 3)
+    except ytclean.PlanRefused as exc:
+        fail(str(exc))
     except yt.YouTubeError as exc:
-        facts["error"] = str(exc)
-        console.print(f"[red]{_esc(str(exc))}[/]")
-        if json_out:
-            sys.stdout.write(json.dumps(facts) + "\n")
-        raise typer.Exit(2) from None
+        fail(str(exc))
     if json_out:
         sys.stdout.write(json.dumps(facts) + "\n")
+        return
+    if "cleanup" in facts and "applied" not in facts and "undone" not in facts:
+        c = facts["cleanup"]
+        console.print(f"\U0001f9f9 Cleanup plan {c['plan_id']}: {c['deletes']} to remove, {c['adds']} to add "
+                      f"({c['cost']} quota units, {c['days']} day(s)). Apply with: runsync youtube --apply --confirm {c['plan_id']}")
         return
     console.print(("\u2705 Signed in" if facts["logged_in"] else "\u26a0\ufe0f Not signed in (run: runsync youtube --login)")
                   + f" \u00b7 quota today {facts['units_today']} of {facts['budget']}")

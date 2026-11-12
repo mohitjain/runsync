@@ -239,3 +239,18 @@ def test_result_dict_has_the_facts_the_skills_present(world):
     t0 = d["tracks"][0]
     assert (t0["id"], t0["title"], t0["codec"], t0["kbps"], t0["quality"]) == ("t0", "Title t0", "mp4a", 258, "high")
     assert t0["bytes"] > 0 and t0["seconds"] == 0
+
+
+def test_a_merged_duplicate_that_left_the_playlist_is_not_removed_and_not_counted_by_the_guard(world):
+    """YouTube cleanup takes losing uploads out of the playlists; that must not trash them or trip the mass-delete guard."""
+    world.add_playlist("P", ids(10))
+    world.run()
+    world.conn.execute("UPDATE tracks SET status = 'merged', master_path = NULL WHERE video_id IN ('t0', 't1', 't2')")
+    world.conn.commit()
+    world.playlists["P"] = ids(10)[3:]          # the three merged ones are gone from the playlist
+    res = world.run()
+    assert not res.aborted and res.removed == []
+    assert [world.status(v) for v in ("t0", "t1", "t2")] == ["merged"] * 3 and world.status("t5") == "downloaded"
+    world.playlists["P"] = ids(10)[4:]          # a real removal still trashes (only t3 here)
+    res = world.run()
+    assert res.removed == ["t3"] and world.status("t3") == "trashed"

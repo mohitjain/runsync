@@ -246,6 +246,10 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
     # --- diff ------------------------------------------------------------
     active = {r["video_id"] for r in conn.execute("SELECT video_id FROM tracks WHERE status != 'trashed'")}
     diff = compute_diff(desired, unknown, active, complete)
+    # A merged duplicate has no file and is not in the library any more; it may leave the YouTube playlists (cleanup)
+    # without that being a removal, and it must never count towards the mass-delete guard.
+    merged = {r["video_id"] for r in conn.execute("SELECT video_id FROM tracks WHERE status = 'merged'")}
+    diff.removed -= merged
     try:
         if not force_delete:
             check_mass_delete(len(diff.removed), len(active), cfg.mass_delete_threshold)
