@@ -367,3 +367,13 @@ def test_adding_at_a_position_falls_back_when_the_playlist_is_sorted_automatical
     with pytest.raises(YouTubeError, match="invalidPosition"):
         yt.add_entry(a, "PL1", "vid1", position=5)            # any other error is still an error
     assert len(t.calls) == 1
+
+
+def test_the_quota_message_counts_the_hours_to_the_next_midnight_pacific():
+    from datetime import datetime
+
+    from runsync.youtube import PACIFIC
+    noon = datetime(2026, 11, 12, 12, 30, tzinfo=PACIFIC).timestamp()
+    assert yt.hours_until_reset(noon) == "in about 12 h"
+    summer = datetime(2026, 7, 12, 23, 0, tzinfo=PACIFIC).timestamp()
+    assert yt.hours_until_reset(summer) == "in about 1 h"

@@ -24,7 +24,7 @@ import urllib.request
 import webbrowser
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 from zoneinfo import ZoneInfo
@@ -199,6 +199,14 @@ def _http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int
             return exc.code, {}
 
 
+def hours_until_reset(now: float | None = None) -> str:
+    """\"in about 11 h\" until the next midnight Pacific, when Google resets the daily quota."""
+    here = datetime.fromtimestamp(now, PACIFIC) if now else datetime.now(PACIFIC)
+    reset = (here + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    hours = max(1, round((reset - here).total_seconds() / 3600))
+    return f"in about {hours} h"
+
+
 def quota_day(now: datetime | None = None) -> str:
     return (now or datetime.now(PACIFIC)).astimezone(PACIFIC).strftime("%Y-%m-%d")
 
@@ -278,7 +286,7 @@ class Api:
                 raise AuthError(f"YouTube rejected the login. {LOGIN_HINT}")
             if status == 403 and reason in ("quotaExceeded", "rateLimitExceeded", "dailyLimitExceeded"):
                 raise QuotaError("The YouTube API quota for today is used up. It resets at midnight Pacific time "
-                                 "(about 12:30 pm India time); nothing more was changed.")
+                                 f"({hours_until_reset(self.clock())}); nothing more was changed.")
             if status >= 500 and attempt < len(self.retry_delays):
                 self.sleep(self.retry_delays[attempt])
                 attempt += 1
