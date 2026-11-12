@@ -86,6 +86,14 @@ def test_the_macs_own_disk_and_a_second_registration_are_refused(w, tmp_path):
         register_device(w.conn, w.vol, "again", w.lib)
 
 
+def test_a_fixed_internal_volume_cannot_be_registered_by_its_path_either(w, tmp_path):
+    recovery = VolumeInfo(tmp_path, "Recovery", "UUID-REC", "APFS", 10**9, dev=-9, internal=True, removable=False)
+    with pytest.raises(ValueError, match="fixed internal volume"):
+        register_device(w.conn, recovery, "oops", w.lib)
+    sd_slot = VolumeInfo(tmp_path, "SD", "UUID-SD", "exFAT", 10**9, dev=-8, internal=True, removable=True)
+    assert register_device(w.conn, sd_slot, "sd", w.lib)           # a card in the Mac's own SD slot is fine
+
+
 def test_a_card_is_found_by_uuid_never_by_name(w):
     imposter = VolumeInfo(Path("/Volumes/RUNCARD"), "RUNCARD", "UUID-OTHER", "exFAT", 10**9, dev=-2)   # same name
     assert find_card(w.conn, [imposter]) is None

@@ -100,6 +100,8 @@ def register_device(conn: sqlite3.Connection, info: VolumeInfo, name: str, libra
     """Remember a card by its UUID. Refuses the disk that holds the library (the Mac's own disk)."""
     if info.dev == os.stat(library).st_dev:
         raise ValueError(f"{info.mount} is the same disk as your library: refusing to treat it as a card")
+    if info.internal and not info.removable:   # Recovery, Preboot, a fixed internal disk: never a card
+        raise ValueError(f"{info.mount} is a fixed internal volume, not a removable card: refusing to register it")
     if conn.execute("SELECT 1 FROM devices WHERE volume_uuid = ?", (info.uuid,)).fetchone():
         raise ValueError("this card is already registered")
     cur = conn.execute("INSERT INTO devices (name, volume_uuid, subpath, registered_at) VALUES (?,?,?,?)",
