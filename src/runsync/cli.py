@@ -21,6 +21,7 @@ from rich.progress import (
 from rich.table import Table
 
 from . import db, fetch
+from . import youtube as yt
 from .card import (
     apply_card_plan,
     build_card_plan,
@@ -800,6 +801,43 @@ def card(register: str = typer.Option("", "--register", help="Mount path of a ca
         sys.stdout.write(json.dumps({**state, **result}) + "\n")
         return
     _print_card(state)
+
+
+@app.command()
+def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTube in your browser (once)."),
+            json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
+    """Show the YouTube API login, today's quota and your playlists. --login signs in."""
+    console.stderr = json_out
+    cfg, conn = _ctx()
+    setup_logging(cfg, "youtube")
+    api = yt.Api(cfg.youtube_token, cfg.youtube_client, conn, cfg.youtube_budget)
+    facts: dict = {"client_file": cfg.youtube_client.exists(), "logged_in": api.logged_in(),
+                   "budget": cfg.youtube_budget, "units_today": api.units_today()}
+    try:
+        if login:
+            if not cfg.youtube_client.exists():
+                raise yt.AuthError(f"{cfg.youtube_client.name} is missing: create a Desktop OAuth client in Google Cloud "
+                                   "and save its JSON in the repo folder.")
+            yt.login(cfg.youtube_client, cfg.youtube_token,
+                     announce=lambda m: console.print(f"\U0001f310 {_esc(m)}"))
+            facts["logged_in"] = True
+            console.print("\u2705 Signed in. The login is saved in youtube_token.json (owner-only, git-ignored).")
+        if facts["logged_in"]:
+            facts["playlists"] = yt.my_playlists(api)
+            facts["units_today"] = api.units_today()
+    except yt.YouTubeError as exc:
+        facts["error"] = str(exc)
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        if json_out:
+            sys.stdout.write(json.dumps(facts) + "\n")
+        raise typer.Exit(2) from None
+    if json_out:
+        sys.stdout.write(json.dumps(facts) + "\n")
+        return
+    console.print(("\u2705 Signed in" if facts["logged_in"] else "\u26a0\ufe0f Not signed in (run: runsync youtube --login)")
+                  + f" \u00b7 quota today {facts['units_today']} of {facts['budget']}")
+    for p in facts.get("playlists", []):
+        console.print(f"  \U0001f4cb {_esc(p['title'])} \u00b7 {p['count']}")
 
 
 def _clip(text: str, width: int = 72) -> str:

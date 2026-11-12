@@ -227,6 +227,29 @@ MIGRATIONS = [
         size INTEGER
     );
     """,
+    # --- v6: the YouTube API (quota ledger and a journal of playlist edits) ---
+    """
+    CREATE TABLE api_usage (          -- quota units spent per day (YouTube's quota resets at midnight Pacific)
+        day TEXT PRIMARY KEY,
+        units INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE youtube_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,         -- running | done | interrupted | undone
+        plan_id TEXT
+    );
+    CREATE TABLE youtube_journal (    -- every playlist edit, so the last run can be undone
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES youtube_runs(id) ON DELETE CASCADE,
+        op TEXT NOT NULL,             -- delete | add
+        playlist_id TEXT NOT NULL,
+        video_id TEXT NOT NULL,
+        playlist_item_id TEXT,
+        position INTEGER
+    );
+    """,
 ]
 
 
