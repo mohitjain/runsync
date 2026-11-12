@@ -21,6 +21,7 @@ python 3.11, uv 0.13.7, ffmpeg/ffprobe, chromaprint (`fpcalc`), deno 2.9.8, yt-d
 - YouTube rotates cookies of any open tab. Export from an Incognito window after visiting `youtube.com/robots.txt`, then close it. A normal export went stale within minutes (401 / "cookies are no longer valid").
 - yt-dlp needs a JS challenge solver (deno + `yt-dlp-ejs`); without it only thumbnails are listed and every track fails.
 - yt-dlp rewrites `cookies.txt` as it runs.
+- Reading playlists no longer depends on cookies: the YouTube Data API (OAuth login) returned the same items as yt-dlp (Running 94 = 94; Refresh 225 distinct, plus one unreadable entry yt-dlp did not list). Cookies remain needed for the Premium audio download and for Liked Music (`LM`), which the API cannot read. The API also exposes repeats (Refresh lists 354 entries for 225 distinct songs).
 - Removed videos (copyright etc.) surface as "Video unavailable" and are treated as permanent.
 - YouTube Music's music-only likes (`LM`, 373 tracks for this account) are not in the account playlist feed; fetched explicitly. "Liked videos" (`LL`, 1390) is everything liked on YouTube, not only music, and is left unselected.
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### YouTube API
+- `runsync youtube`: official YouTube Data API v3 over OAuth (installed-app flow with PKCE and a loopback redirect, stdlib only). The token is saved owner-only in `youtube_token.json` (gitignored and blocked by the guard); only Google hosts are contacted; tokens and the client secret are never logged; every call is counted against a daily quota ledger (budget 8,000 of 10,000 units).
+- Playlists are read through the API when signed in (cookies are no longer needed for reading and are the fallback); Liked Music and Watch later stay on cookies. `playlists --json` reports the `source`.
+- `youtube --cleanup` / `--apply --confirm ID` / `--undo`: removes repeated entries and the losing uploads of songs `dedupe` merged from your YouTube playlists. A song missing from a playlist is swapped (the kept upload is added before the loser is removed). Journalled and undoable; Liked Music, Liked videos and Watch later are never written. Merged tracks leaving a playlist no longer count as removals in `sync`.
+- `youtube --search`, `--replacements`, `--add IDS --to PLAYLIST [--create]`: find replacements for unavailable songs (no quota), add songs to a playlist, and make the private `rerunsync` playlist, which is selected so the next refresh downloads it.
+- Skills `runsync-youtube`, `runsync-replace`, `runsync-add`, and a YouTube step in the `runsync` orchestrator.
+- Tests can no longer reach Google (an autouse fixture blocks the transport).
+
 ### Phase 2a: metadata, language, covers
 - `runsync resolve`: tiers YouTube fields, title parser, MusicBrainz, iTunes; confidence, trust order and a review queue (`review.csv`).
 - `sync --json` and `resolve --json` list every track (title, size, quality; artist, album, year, language, source, file, cover, ReplayGain, review reason) and the orchestrator shows them in its Download and Tagging cards.

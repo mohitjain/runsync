@@ -13,6 +13,7 @@ See [PLAN.md](PLAN.md) for the build plan and locked decisions, [phase0-findings
 | 2a | Metadata, language, covers, tagged player copies, web-search enrichment via a Claude Code skill (no API key) | Built; awaiting the review checkpoint |
 | 3 | Dedupe | Done; run on the real library (96 duplicates removed) |
 | 4 | Player build and safe sync to the card | Built and tested without a card; awaiting the first real card sync |
+| 4b | YouTube API: read playlists without fresh cookies, clean duplicates out of them, add songs, replace lost ones | Built and tested; first real write pending your OK |
 | 5 | Status, doctor, launchd automation, full import | Not started |
 
 ## Requirements
@@ -47,6 +48,16 @@ When YouTube invalidates the session, `runsync` says so and prints these steps a
 
 If `cookies.txt` is missing or expired, `runsync` asks you to refresh it or continue anonymously at reduced quality. Non-interactive runs fall back automatically and note it in the log.
 
+### YouTube login (optional, recommended)
+
+The cookies above are still what downloads audio at Premium quality, but they rotate and break. Signing in to the official YouTube API removes that for **reading** your playlists, and lets runsync tidy and extend them.
+
+1. In [Google Cloud](https://console.cloud.google.com) create a project, enable **YouTube Data API v3**, set up the consent screen (External, add yourself as a **test user**) and create an **OAuth client ID of type Desktop app**.
+2. Save its JSON in the repo root as `client_secret.json` (**gitignored**, the guard blocks it).
+3. Run `uv run runsync youtube --login`, approve in the browser. The login is saved in `youtube_token.json` (owner-only, **gitignored**). While the Google app is in testing mode the login may expire after 7 days; run `--login` again.
+
+Playlists are then read through the API; Liked Music (`LM`) and Watch later still need the cookies. If the API fails for any reason runsync falls back to the cookies. Nothing is written to YouTube without a preview and `--confirm <plan id>`; quota use is tracked (10,000 units a day from Google; runsync stops at 8,000).
+
 ## Usage
 
 The interface is Claude Code skills. Open Claude Code in this repo and say what you want:
@@ -60,8 +71,11 @@ The interface is Claude Code skills. Open Claude Code in this repo and say what 
 | "status" / "how is it going" | `runsync-status` | progress at a glance; schedule it with `/loop 5m /runsync-status` during a long download |
 | "sync to the card" | `runsync-sync-card` | registers your microSD card once, previews what changes, syncs only the confirmed plan, offers to eject |
 | "remove duplicates" | `runsync-dedupe` | finds the same song uploaded twice, asks about doubtful pairs, deletes the extra |
+| "clean my YouTube playlists" | `runsync-youtube` | signs in, previews repeats and merged duplicates in your YouTube playlists, removes them after you confirm (undoable) |
+| "replace the unavailable songs" | `runsync-replace` | searches YouTube for the songs that were removed, you pick, they go into a private `rerunsync` playlist that the next refresh downloads |
+| "add this song to Running" | `runsync-add` | searches, you pick the upload, confirm, added to the playlist |
 
-The skills drive seven commands (most take `--json`, which they use to present results), which you can also run yourself:
+The skills drive eight commands (most take `--json`, which they use to present results), which you can also run yourself:
 
 ```
 uv run runsync playlists                       # numbered list: ✅ syncing, ⬜ not
@@ -77,6 +91,13 @@ uv run runsync status                          # progress bar, rate and time lef
 uv run runsync dedupe                          # show duplicates (nothing changes)
 uv run runsync card                            # the registered card and what a sync would do (nothing changes)
 uv run runsync card --apply --confirm ID       # sync exactly the previewed plan; --undo reverses the last sync, --eject when done
+uv run runsync youtube                         # signed in? quota used today, your playlists
+uv run runsync youtube --login                 # sign in once (opens your browser)
+uv run runsync youtube --cleanup               # preview: repeats and merged duplicates in your YouTube playlists
+uv run runsync youtube --apply --confirm ID    # run (the first --batch changes) exactly that plan; --undo reverses the last run
+uv run runsync youtube --replacements          # search replacements for unavailable songs (no quota, nothing changes)
+uv run runsync youtube --search "song artist"  # candidates for one song
+uv run runsync youtube --add ID1,ID2 --to rerunsync --create   # preview adding songs (then --apply --confirm ID)
 uv run runsync dedupe --apply --confirm ID     # delete exactly the previewed plan for good (the preview prints ID); --undo ID brings one back
 ```
 
@@ -121,6 +142,7 @@ logs/last_run.log
 - Mass-delete guard: stops if more than 20% of tracks would be removed (`--force-delete` to override).
 - Removed tracks go to `.trash/` for 14 days.
 - Downloads go to `.part` files and pass an `ffprobe` check before entering `master/`; leftover partials from a killed run are cleaned up at the next start.
+- YouTube writes (cleanup, adds) need a preview and `--confirm <plan id>` of that exact plan, add before they delete (a song never vanishes from a playlist), are journalled for `--undo`, never touch Liked Music, Liked videos or Watch later, and stop at 8,000 of Google's 10,000 daily quota units.
 - Retries: 3 attempts with 5s/30s/120s backoff, transient errors only.
 
 ## Development

@@ -41,7 +41,7 @@ happened in that step, built from that step's facts. Show a card even when nothi
 Name failures with the reason in plain words. Add the "next" line only when the user must do something.
 
 `sync --json` and `resolve --json` print the result as one JSON object on stdout (the normal output goes to stderr, so
-use `2>/dev/null`); `playlists --json`, `status --json` and `dedupe --json` work the same way.
+use `2>/dev/null`); `playlists --json`, `status --json`, `dedupe --json`, `card --json` and `youtube --json` work the same way.
 
 ## 1. Set up
 
@@ -66,15 +66,16 @@ Card:
 
 ## 2. Playlists
 
-`uv run runsync playlists --json`. If `live` is false the cookies were rejected: go back to the cookie step of
-**runsync-setup**, then return here. Ask with AskUserQuestion "Change which playlists sync?" with `Keep as is` and
+`uv run runsync playlists --json`. `source` is `api` when the user is signed in to YouTube (no cookies needed to read
+playlists) and `cookies` otherwise. If `live` is false neither worked (cookies rejected and no YouTube login): go back to the
+cookie step of **runsync-setup**, then return here. Ask with AskUserQuestion "Change which playlists sync?" with `Keep as is` and
 `Change` (go straight to **runsync-playlists** when none is syncing). On `Change`, run **runsync-playlists**.
 
 Card (one row per fact; the ▲ ▼ rows only when something changed):
 
 | | Playlists |
 |:-:|---|
-| 📋 | 3 of 5 syncing: Liked Music, Refresh, Running |
+| 📋 | 3 of 5 syncing: Liked Music, Refresh, Running · read through the YouTube API |
 | ▲ | Started: Gym Mix |
 
 ## 3. Download
@@ -151,7 +152,24 @@ Card:
 
 (nothing found: a single ⬜ row "No duplicates")
 
-## 7. Card
+## 7. YouTube playlists
+
+Optional and quick. `uv run runsync youtube --json 2>/dev/null`: not signed in (or no client file): one ⬜ row "Not signed
+in to YouTube (optional)" and move on, never ask here. Signed in: `uv run runsync youtube --cleanup --json 2>/dev/null`;
+`cleanup.ops` > 0: run the **runsync-youtube** skill (preview, confirm, apply); 0: a ⬜ row "Playlists are clean".
+
+If the Download step found unavailable songs with a title on record, offer once with AskUserQuestion "Search replacements
+for N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill.
+
+Card:
+
+| | YouTube |
+|:-:|---|
+| ✅ | 112 repeats and duplicates removed |
+| 🔄 | 21 songs swapped to the kept upload |
+| 🔎 | 9 replacements added to rerunsync |
+
+## 8. Card
 
 If a card is registered and inserted, run the **runsync-sync-card** skill (it previews, asks, then writes only the
 plan the user confirmed). Not registered: offer it once with AskUserQuestion ("Set up your card now?" `Yes` / `Later`).
@@ -166,7 +184,7 @@ Card:
 | 📋 | 3 playlist files |
 | ✅ | 352 files on the card |
 
-## 8. Final report
+## 9. Final report
 
 One table, one row per step with its headline number, built from the cards:
 
@@ -177,6 +195,7 @@ One table, one row per step with its headline number, built from the cards:
 | ✅ | Downloaded 50 new |
 | ✅ | Tagged 50 · 48 player copies |
 | ✅ | 3 duplicates removed |
+| ✅ | YouTube playlists tidy |
 | ✅ | Card · 352 files |
 | ⚠️ | 6 need you |
 
@@ -188,4 +207,6 @@ Then at most one line, only if something needs the user (for example: the card w
 - Never delete, trash, or pass `--force-delete` or `--force`; never touch `master/`. Duplicate removal happens only inside
   the **runsync-dedupe** skill, after the user confirms.
 - Never print `cookies.txt`. A rejected cookie is a ❌ that sends the user to the export steps, not something to retry.
+- YouTube writes (cleanup, adds) happen only inside the **runsync-youtube**, **runsync-replace** and **runsync-add** skills,
+  after the user confirms the exact plan. Never print `client_secret.json` or `youtube_token.json`.
 - A card per step, always. Do not explain steps that went fine.

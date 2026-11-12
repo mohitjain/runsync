@@ -25,6 +25,7 @@ One-stop tool: YouTube playlists → clean, tagged, best-quality music → synce
 | Dedupe | In v1. Wrong merge is worse than a leftover duplicate. Never merge live/remix/cover/acoustic/instrumental/slowed-reverb into original. Losers kept as aliases, reversible. |
 | Retries | 3 retries per track per run, backoff 5s/30s/120s. Transient errors only. Permanent errors (private/deleted/blocked) → `unavailable`, keep existing file. |
 | Safety | Wrong-volume protection (UUID), dry-run, abort on empty/failed fetch, mass-delete guard (>20%), trash folder 14 days, no deletes on failures. |
+| YouTube API | Official Data API v3 over OAuth (Desktop client, PKCE, token owner-only and gitignored). Reads playlists (cookies are the fallback and still serve audio and Liked Music), cleans repeats and merged duplicates out of the user's playlists, adds songs, and puts replacements for unavailable songs into a private `rerunsync` playlist. Every write is previewed and gated by `--confirm <plan id>`, adds before deletes, journalled for undo, never touches `LM`/`LL`/`WL`; budget 8,000 of 10,000 units a day. |
 | Lyrics | **Out of v1** (v2). Player reads sidecar `.lrc` only. |
 | Multi-device | One library, many device profiles. v1 ships one profile; schema and engine are multi-device from day one. |
 | Stack | Python 3.11+, uv, yt-dlp[default] (library, incl. yt-dlp-ejs), deno, ffmpeg, mutagen, SQLite, typer + rich + questionary (CLI), musicbrainzngs, pyacoustid/chromaprint, Anthropic API (fallback tier only). |
@@ -235,6 +236,10 @@ devices:
 
 ---
 
+## Phase 4b — YouTube API (built)
+
+Reading through the API, cleanup of repeats and merged duplicates in the user's YouTube playlists, adding songs, replacements for lost songs (`rerunsync`). Skills: `runsync-youtube`, `runsync-replace`, `runsync-add`. Acceptance: a one-operation real trial (one delete and one add, then `--undo`) before the first full cleanup.
+
 ## Phase 5 — Trust layer, automation, first import
 
 **Goal:** you stop checking the card by hand.
@@ -242,7 +247,7 @@ devices:
 **Build**
 1. `runsync status` — one line: "412 tracks, 3 need review, last synced 6:40am"
 2. Per-run change log: +added, −removed, failed (reason), unavailable, review-needed; macOS notification at end
-3. `runsync doctor`: yt-dlp version + auto-update, ffmpeg, deno, cookie validity ("log in to YouTube again"), API key, disk space, card detected
+3. `runsync doctor`: yt-dlp version + auto-update, ffmpeg, deno, cookie validity ("log in to YouTube again"), YouTube API login (a testing-mode login can expire after 7 days), API key, disk space, card detected
 4. `launchd`: nightly `fetch` (download + tag + build); `sync` triggers only when the card mounts. Downloads never wait for the card.
 5. First-import mode: resumable, progress shown, newest playlists first, spread over several nights with per-night cap
 6. Git repo for config/overrides/DB schema; periodic backup of `master/`

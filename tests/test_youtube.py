@@ -127,6 +127,7 @@ def test_expired_token_is_refreshed_and_saved(files):
     assert form_calls[0]["grant_type"] == "refresh_token" and form_calls[0]["refresh_token"] == "REFRESH-1"
     assert t.calls[0][2]["Authorization"] == "Bearer ACCESS-2"
     assert json.loads(tok.read_text())["access_token"] == "ACCESS-2" and json.loads(tok.read_text())["refresh_token"] == "REFRESH-1"
+    assert oct(os.stat(tok).st_mode & 0o777) == "0o600"          # a refreshed token file stays owner-only
 
 
 def test_a_401_is_retried_once_with_a_fresh_token_then_gives_up(files):
