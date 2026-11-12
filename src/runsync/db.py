@@ -190,6 +190,43 @@ MIGRATIONS = [
         ints TEXT NOT NULL
     );
     """,
+    # --- v5: cards (Phase 4) -------------------------------------------------
+    """
+    CREATE TABLE devices (            -- a card runsync may write to; identified by its volume UUID, never by name
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        volume_uuid TEXT NOT NULL UNIQUE,
+        subpath TEXT NOT NULL DEFAULT 'Music',
+        registered_at TEXT NOT NULL
+    );
+    CREATE TABLE device_tracks (      -- the manifest: exactly what runsync has put on this card (audio and playlists)
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        filename TEXT NOT NULL,
+        video_id TEXT NOT NULL,       -- '' for a playlist file
+        size INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        src_mtime_ns INTEGER NOT NULL DEFAULT 0,
+        synced_at TEXT NOT NULL,
+        PRIMARY KEY (device_id, filename)
+    );
+    CREATE TABLE card_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,         -- running | done | interrupted | undone
+        plan_id TEXT
+    );
+    CREATE TABLE card_journal (       -- what a run did, so the last run can be undone
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id INTEGER NOT NULL REFERENCES card_runs(id) ON DELETE CASCADE,
+        op TEXT NOT NULL,             -- add | update | remove
+        video_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        src TEXT,
+        size INTEGER
+    );
+    """,
 ]
 
 
