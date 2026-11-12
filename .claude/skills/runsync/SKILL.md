@@ -96,7 +96,7 @@ Show the 🎧 row only when both qualities occurred or `standard_quality` > 0; t
 
 ## 4. Clean the tags
 
-`uv run runsync resolve --json 2>/dev/null`. It builds `player/m4a/` copies of AAC tracks; other formats wait for Phase 4.
+`uv run runsync resolve --json 2>/dev/null`. AAC masters are copied to `player/m4a/`; Opus and AC-3 masters are converted to FLAC in `player/flac/`.
 
 Card, from the JSON (`resolved`, `by_tier`, `built`, `held`, `build_skipped`, `review`, `unlabelled`, `enrich_open`):
 
@@ -104,7 +104,7 @@ Card, from the JSON (`resolved`, `by_tier`, `built`, `held`, `build_skipped`, `r
 |:-:|---|
 | ✅ | 50 tagged · 31 from MusicBrainz, 12 from YouTube, 7 from the title |
 | 🎵 | 48 player copies built |
-| → | 2 not AAC: no player copy yet |
+| 🔁 | 2 converted to FLAC (Opus masters) |
 | ⚠️ | 3 need you (no artist found, low confidence) |
 | 🌐 | Language unknown for 2 artists: Pritam, Mitraz |
 
