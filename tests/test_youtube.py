@@ -248,3 +248,110 @@ def test_youtube_command_reports_not_signed_in_and_makes_no_network_call(tmp_pat
     facts = json.loads(out.stdout)
     assert out.exit_code == 0 and facts["logged_in"] is False and facts["units_today"] == 0 and "playlists" not in facts
     assert "client_secret" not in out.output.lower() and "GOCSPX" not in out.output
+
+
+# ---- Stage B: reading playlists through the API ---------------------------------------------------------------------
+
+def _entries(*spec):
+    return [yt.Entry(v, f"i{n}", n, t, "Chan", ok) for n, (v, t, ok) in enumerate(spec)]
+
+
+def test_api_items_have_the_same_shape_as_the_ytdlp_ones(monkeypatch):
+    from runsync import fetch
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: _entries(("a", "Song A", True), ("gone", "Deleted video", False),
+                                                                          ("a", "Song A", True), ("b", "Song B", True)))
+    api_items = fetch.api_playlist_items(object(), "PL1")
+    ytdlp_items = fetch.parse_entries([{"id": "a", "title": "Song A"}, {"id": "gone", "title": "[Deleted video]"},
+                                       {"id": "a", "title": "Song A"}, {"id": "b", "title": "Song B"}])
+    assert (api_items.ids, api_items.titles, api_items.unknown) == (ytdlp_items.ids, ytdlp_items.titles, ytdlp_items.unknown)
+    assert api_items.source == "api" and ytdlp_items.source == "cookies"
+
+
+def _no_ytdlp(monkeypatch, answer=None):
+    from runsync import fetch
+    calls = []
+
+    class FakeYdl:
+        def __init__(self, opts):
+            calls.append(opts)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"entries": answer if answer is not None else [{"id": "c1", "title": "From cookies"}]}
+    monkeypatch.setattr(fetch.yt_dlp, "YoutubeDL", FakeYdl)
+    return calls
+
+
+def test_fetch_uses_the_api_and_never_touches_ytdlp_when_it_answers(monkeypatch):
+    from runsync import fetch
+    ytdlp = _no_ytdlp(monkeypatch)
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: _entries(("a", "Song A", True)))
+    items = fetch.fetch_playlist_items("https://www.youtube.com/playlist?list=PL1", None, api=object())
+    assert items.ids == ["a"] and items.source == "api" and ytdlp == []
+
+
+@pytest.mark.parametrize("failure", ["error", "empty"])
+def test_fetch_falls_back_to_cookies_when_the_api_fails_or_returns_nothing(monkeypatch, failure):
+    from runsync import fetch
+    _no_ytdlp(monkeypatch)
+
+    def entries(api, pid):
+        if failure == "error":
+            raise QuotaError("out of quota")
+        return []
+    monkeypatch.setattr(yt, "playlist_entries", entries)
+    items = fetch.fetch_playlist_items("https://www.youtube.com/playlist?list=PL1", None, api=object())
+    assert items.ids == ["c1"] and items.source == "cookies"
+
+
+@pytest.mark.parametrize("pid", ["LM", "WL"])
+def test_liked_music_and_watch_later_always_use_cookies(monkeypatch, pid):
+    from runsync import fetch
+    _no_ytdlp(monkeypatch)
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, p: pytest.fail("the API must not be asked for " + pid))
+    items = fetch.fetch_playlist_items(f"https://music.youtube.com/playlist?list={pid}", None, api=object())
+    assert items.source == "cookies" and items.ids == ["c1"]
+
+
+def test_without_an_api_nothing_changes(monkeypatch):
+    from runsync import fetch
+    ytdlp = _no_ytdlp(monkeypatch)
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, p: pytest.fail("no api, no call"))
+    assert fetch.fetch_playlist_items("https://www.youtube.com/playlist?list=PL1", None).ids == ["c1"] and len(ytdlp) == 1
+
+
+def test_an_empty_api_answer_for_a_known_playlist_is_still_a_failed_fetch_in_sync(monkeypatch, tmp_path):
+    """The sync guard (empty answer for a playlist that had tracks = failed fetch, nothing deleted) holds with the API too."""
+    from runsync import fetch
+    _no_ytdlp(monkeypatch, answer=[])
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, p: [])
+    items = fetch.fetch_playlist_items("https://www.youtube.com/playlist?list=PL1", None, api=object())
+    assert items.ids == [] and items.unknown == []     # sync.py then refuses to delete anything (tests/test_run_sync.py)
+
+
+def test_account_playlists_through_the_api_keep_the_special_ones(monkeypatch):
+    from runsync import fetch
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 94}])
+    got = {p.id: p.title for p in fetch.api_account_playlists(object())}
+    assert got == {"PL1": "Running", "LL": "Liked videos", "WL": "Watch later", "LM": "Liked Music"}
+
+
+def test_merge_remote_prefers_the_api_and_falls_back_to_cookies(conn, monkeypatch):
+    from runsync import cli, fetch
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1}])
+    monkeypatch.setattr(fetch, "fetch_account_playlists",
+                        lambda c: [fetch.PlaylistInfo("PLc", "From cookies", "https://www.youtube.com/playlist?list=PLc")])
+    assert cli._merge_remote(conn, None, api=object()) == "api"
+    assert {r[0] for r in conn.execute("SELECT id FROM playlists")} >= {"PL1", "LM"}
+
+    def boom(api):
+        raise AuthError("login expired")
+    monkeypatch.setattr(yt, "my_playlists", boom)
+    assert cli._merge_remote(conn, object(), api=object()) == "cookies"
+    with pytest.raises(RuntimeError):
+        cli._merge_remote(conn, None, api=object())       # API down and no cookies: an error, never an empty list

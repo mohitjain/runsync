@@ -30,7 +30,7 @@ class World:
         self.playlists[pid] = list(ids)
         self.unknown[pid] = list(unknown)
 
-    def _fetch(self, url, cookies):
+    def _fetch(self, url, cookies, api=None):
         val = self.playlists[url]
         if isinstance(val, Exception):
             raise val

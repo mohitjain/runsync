@@ -188,7 +188,7 @@ def purge_trash(cfg: Config, today: datetime | None = None) -> int:
 
 def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, force_delete: bool = False,
              log: Callable[[str], None] = print, sleep: Callable[[float], None] = time.sleep,
-             rep: Reporter | None = None, probe: bool = False) -> RunResult:
+             rep: Reporter | None = None, probe: bool = False, api=None) -> RunResult:
     rep = rep or Reporter()
     res = RunResult(anonymous=cookies is None)
     logger.info("sync start: dry_run=%s force_delete=%s cookies=%s", dry_run, force_delete,
@@ -207,7 +207,7 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
     complete = True
     for pl in playlists:
         try:
-            items = fetch.fetch_playlist_items(pl["url"], cookies)
+            items = fetch.fetch_playlist_items(pl["url"], cookies, api)
         except Exception as exc:  # noqa: BLE001
             log(f"fetch failed for '{pl['title']}': {exc}")
             rep.warn(f"fetch failed for '{pl['title']}': {exc}")

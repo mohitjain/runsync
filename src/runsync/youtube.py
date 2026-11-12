@@ -350,3 +350,9 @@ def add_entry(api: Api, playlist_id: str, video_id: str, position: int | None = 
 
 def delete_entry(api: Api, item_id: str) -> None:
     api.request("DELETE", "playlistItems", {"id": item_id})
+
+
+def open_api(cfg, conn: sqlite3.Connection | None = None) -> Api | None:
+    """An Api for this library when the owner has signed in, else None (callers then use cookies)."""
+    api = Api(cfg.youtube_token, cfg.youtube_client, conn, cfg.youtube_budget)
+    return api if api.logged_in() and Path(cfg.youtube_client).exists() else None

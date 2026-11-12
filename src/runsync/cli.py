@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -87,9 +88,19 @@ def _cookie_hint(force: bool = False) -> None:
             "  3. Export youtube.com cookies, save over [bold]cookies.txt[/], then close the window")
 
 
-def _merge_remote(conn, cookies: Path) -> int:
-    """Upsert account playlists from YouTube, keeping saved selection. Unselected ones that vanished are dropped."""
-    found = fetch.fetch_account_playlists(cookies)
+def _merge_remote(conn, cookies: Path | None, api=None) -> str:
+    """Upsert account playlists from YouTube (the API when signed in, else cookies), keeping saved selection.
+    Unselected ones that vanished are dropped. Returns the source used: "api" or "cookies"."""
+    found, source = None, "cookies"
+    if api is not None:
+        try:
+            found, source = fetch.api_account_playlists(api), "api"
+        except yt.YouTubeError as exc:
+            logging.getLogger("runsync.cli").warning("playlist list via API failed (%s); using cookies", exc)
+    if found is None:
+        if cookies is None:
+            raise RuntimeError("no YouTube login and no usable cookies")
+        found = fetch.fetch_account_playlists(cookies)
     for p in found:
         conn.execute("INSERT INTO playlists (id, title, url, kind) VALUES (?, ?, ?, 'account') "
                      "ON CONFLICT(id) DO UPDATE SET title = excluded.title", (p.id, p.title, p.url))
@@ -98,7 +109,7 @@ def _merge_remote(conn, cookies: Path) -> int:
         marks = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM playlists WHERE kind = 'account' AND selected = 0 AND id NOT IN ({marks})", ids)
     conn.commit()
-    return len(found)
+    return source
 
 
 def _print_playlists(conn) -> None:
@@ -138,10 +149,11 @@ def playlists(json_out: bool = typer.Option(False, "--json", help="The list as J
                           "the next sync moves them to .trash (kept 14 days). Preview: runsync sync --dry-run")
         return
     cookies = cfg.cookies if check_cookies(cfg.cookies).usable else None
-    live, problem = False, ""
-    if cookies:
+    api = yt.open_api(cfg, conn)
+    live, problem, source = False, "", "cookies"
+    if cookies or api:
         try:
-            _merge_remote(conn, cookies)
+            source = _merge_remote(conn, cookies, api)
             live = True
         except Exception as exc:  # noqa: BLE001
             logger.warning("playlist refresh failed: %s", exc)
@@ -152,7 +164,9 @@ def playlists(json_out: bool = typer.Option(False, "--json", help="The list as J
 
     rows = conn.execute("SELECT * FROM playlists ORDER BY title").fetchall()
     if json_out:   # facts only; the skill decides how to present them
-        console.print_json(json.dumps({"live": live, "problem": problem, "playlists": list_playlists(conn)}))
+        listed = [{**r, "source": "cookies" if source == "cookies" or r["id"] in fetch.API_UNREADABLE else "api"}
+                  for r in list_playlists(conn)]
+        console.print_json(json.dumps({"live": live, "problem": problem, "source": source, "playlists": listed}))
         return
     if problem:
         console.print("\u26a0\ufe0f [yellow]Could not refresh from YouTube; this is the saved list, not live.[/]")
@@ -392,7 +406,7 @@ def sync(dry_run: bool = typer.Option(False, "--dry-run", help="Show what would 
     try:
         with run_lock(cfg.library) if needs_lock else nullcontext():
             res = run_sync(cfg, conn, cookies, dry_run=dry_run, force_delete=force_delete,
-                           log=logger.info, rep=reporter, probe=probe)
+                           log=logger.info, rep=reporter, probe=probe, api=yt.open_api(cfg, conn))
     except AlreadyRunning as exc:
         console.print(f"[red]{exc}[/]. Wait for it to finish, or stop it (Ctrl-C) and retry.")
         raise typer.Exit(3) from None
