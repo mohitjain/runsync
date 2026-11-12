@@ -42,7 +42,7 @@ def test_the_whole_flow_register_preview_confirm_apply_undo(env):
     pid = s["plan_id"]
     for args in (["--apply"], ["--apply", "--confirm", "wrongplan123"]):          # the gate lives in the command
         out = run(*args)
-        assert out.exit_code == 2 and "Not confirmed" in out.output
+        assert out.exit_code == 2 and "Not confirmed" in " ".join(out.output.split())
         assert not (w.mount / "Music").exists()
     code, s = facts("--apply", "--confirm", pid)
     assert code == 0 and s["applied"]["added"] == 2 and s["state"] == "ready" and s["adds"] == 0
@@ -61,7 +61,7 @@ def test_a_different_card_is_never_written_and_the_command_says_so(env, tmp_path
     _code, s = facts()
     assert s["state"] == "not_inserted"
     out = run("--apply", "--confirm", "anything")
-    assert out.exit_code == 2 and "No registered card is inserted" in out.output
+    assert out.exit_code == 2 and "No registered card is inserted" in " ".join(out.output.split())
     assert list(other.iterdir()) == []
 
 
@@ -77,4 +77,4 @@ def test_the_macs_own_disk_cannot_be_registered(env, monkeypatch):
         out = run("--register", str(w.mount))
     finally:
         mp.undo()
-    assert out.exit_code == 2 and "same disk as your library" in out.output
+    assert out.exit_code == 2 and "same disk as your library" in " ".join(out.output.split())

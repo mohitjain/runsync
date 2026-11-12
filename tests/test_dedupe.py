@@ -271,7 +271,7 @@ def test_apply_needs_the_id_of_the_exact_plan_and_nothing_is_deleted_otherwise(c
     pid = plan_id(plan(conn))
     for args in (["--apply"], ["--apply", "--confirm", "wrongplan123"], ["--apply", "--confirm", ""]):
         out = run(cli.app, ["dedupe", *args])
-        assert out.exit_code == 2 and "Not confirmed" in out.output
+        assert out.exit_code == 2 and "Not confirmed" in " ".join(out.output.split())
         assert (cfg.master / "lose.m4a").exists()
     assert run(cli.app, ["dedupe", "--apply", "--confirm", pid]).exit_code == 0
     assert not (cfg.master / "lose.m4a").exists() and (cfg.master / "keep.m4a").exists()
