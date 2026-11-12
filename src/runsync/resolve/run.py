@@ -253,7 +253,7 @@ def _build_all(cfg, conn, res, rep, cover_fn, analyse_fn, online: bool) -> None:
                                  "WHERE video_id = ?", (g["loudness_lufs"], g["replaygain_gain_db"],
                                                          g["replaygain_peak"], vid))
             m = dict(conn.execute("SELECT * FROM metadata WHERE video_id = ?", (vid,)).fetchone())
-            out = build_player_copy(master, cfg.player / "m4a", vid, m, cover)
+            out = build_player_copy(master, cfg.player / "m4a", vid, m, cover, flac_dir=cfg.player / "flac")
             if "skipped" in out:
                 res.build_skipped += 1
                 rep.skipped(vid, out["skipped"])
@@ -261,9 +261,9 @@ def _build_all(cfg, conn, res, rep, cover_fn, analyse_fn, online: bool) -> None:
             old = Path(r["player_path"]) if r["player_path"] else None
             if old and old != out["path"] and old.exists() and read_video_id(old) == vid:
                 old.unlink()   # renamed after a re-resolve: remove our own stale derived copy, never a master
-            conn.execute("UPDATE tracks SET clean_filename=?, player_path=?, player_format='m4a', "
+            conn.execute("UPDATE tracks SET clean_filename=?, player_path=?, player_format=?, "
                          "player_size_bytes=? WHERE video_id = ?",
-                         (out["filename"], str(out["path"]), out["size"], vid))
+                         (out["filename"], str(out["path"]), out["format"], out["size"], vid))
             log_event(conn, vid, "player_built", {"file": out["filename"]})
             conn.commit()
             res.built += 1

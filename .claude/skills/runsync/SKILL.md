@@ -1,6 +1,6 @@
 ---
 name: runsync
-description: Run the whole runsync flow end to end - set up if needed, choose playlists, download new tracks, clean the tags, search the web for whatever is unresolved, remove duplicates, and report what happened after every step. Use when the user says "sync my music", "run runsync", "update my library", "get started", or anything that means the whole pipeline rather than one step.
+description: Run the whole runsync flow end to end - set up if needed, choose playlists, download new tracks, clean the tags, search the web for whatever is unresolved, remove duplicates, sync the card, and report what happened after every step. Use when the user says "sync my music", "run runsync", "update my library", "get started", or anything that means the whole pipeline rather than one step.
 ---
 
 # runsync (orchestrator)
@@ -96,7 +96,7 @@ Show the 🎧 row only when both qualities occurred or `standard_quality` > 0; t
 
 ## 4. Clean the tags
 
-`uv run runsync resolve --json 2>/dev/null`. It builds `player/m4a/` copies of AAC tracks; other formats wait for Phase 4.
+`uv run runsync resolve --json 2>/dev/null`. AAC masters are copied to `player/m4a/`; Opus and AC-3 masters are converted to FLAC in `player/flac/`.
 
 Card, from the JSON (`resolved`, `by_tier`, `built`, `held`, `build_skipped`, `review`, `unlabelled`, `enrich_open`):
 
@@ -104,7 +104,7 @@ Card, from the JSON (`resolved`, `by_tier`, `built`, `held`, `build_skipped`, `r
 |:-:|---|
 | ✅ | 50 tagged · 31 from MusicBrainz, 12 from YouTube, 7 from the title |
 | 🎵 | 48 player copies built |
-| → | 2 not AAC: no player copy yet |
+| 🔁 | 2 converted to FLAC (Opus masters) |
 | ⚠️ | 3 need you (no artist found, low confidence) |
 | 🌐 | Language unknown for 2 artists: Pritam, Mitraz |
 
@@ -136,7 +136,22 @@ Card:
 
 (nothing found: a single ⬜ row "No duplicates")
 
-## 7. Final report
+## 7. Card
+
+If a card is registered and inserted, run the **runsync-sync-card** skill (it previews, asks, then writes only the
+plan the user confirmed). Not registered: offer it once with AskUserQuestion ("Set up your card now?" `Yes` / `Later`).
+Not inserted: one ⬜ row "Card not inserted" and move on.
+
+Card:
+
+| | Card |
+|:-:|---|
+| ➕ | 12 added · 340 MB |
+| 🗑️ | 3 removed |
+| 📋 | 3 playlist files |
+| ✅ | 352 files on the card |
+
+## 8. Final report
 
 One table, one row per step with its headline number, built from the cards:
 
@@ -147,9 +162,10 @@ One table, one row per step with its headline number, built from the cards:
 | ✅ | Downloaded 50 new |
 | ✅ | Tagged 50 · 48 player copies |
 | ✅ | 3 duplicates removed |
+| ✅ | Card · 352 files |
 | ⚠️ | 6 need you |
 
-Then at most one line: copying `player/m4a/` to the microSD card is manual for now (automatic card sync is Phase 4).
+Then at most one line, only if something needs the user (for example: the card was not inserted).
 
 ## Rules
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from contextlib import nullcontext
 from pathlib import Path
@@ -20,6 +21,17 @@ from rich.progress import (
 from rich.table import Table
 
 from . import db, fetch
+from .card import (
+    apply_card_plan,
+    build_card_plan,
+    candidate_volumes,
+    card_plan_id,
+    card_state,
+    devices,
+    register_device,
+    undo_last_run,
+    volume_info,
+)
 from .config import Config, load_config
 from .cookies import check_cookies
 from .dedupe import apply_plan, build_plan, plan_id, plan_to_dict, record_decision
@@ -361,8 +373,7 @@ def sync(dry_run: bool = typer.Option(False, "--dry-run", help="Show what would 
                                        "output goes to stderr); for the skills to present.")
          ) -> None:
     """Fetch selected playlists, trash removed tracks, download new ones."""
-    if json_out:
-        console.file = sys.stderr
+    console.stderr = json_out   # --json: facts on stdout, the human view on stderr
     cfg, conn = _ctx()
     if limit is not None:
         cfg.max_downloads_per_run = limit
@@ -504,8 +515,7 @@ def resolve(dry_run: bool = typer.Option(False, "--dry-run", help="Show what wou
             json_out: bool = typer.Option(False, "--json", help="Print the result as JSON on stdout (the normal "
                                           "output goes to stderr); for the skills to present.")) -> None:
     """Clean titles into artist/title/album/year/language, then build tagged player copies."""
-    if json_out:
-        console.file = sys.stderr
+    console.stderr = json_out   # --json: facts on stdout, the human view on stderr
     cfg, conn = _ctx()
     logger = setup_logging(cfg, "resolve", verbose)
     http = None if (offline or not cfg.online) else Http(conn, cache_days=cfg.http_cache_days)
@@ -629,7 +639,7 @@ def status(json_out: bool = typer.Option(False, "--json", help="Facts as JSON (f
     need_you = conn.execute("SELECT COUNT(*) FROM metadata WHERE needs_review = 1").fetchone()[0]
     copies = conn.execute("SELECT COUNT(*) FROM tracks WHERE player_path IS NOT NULL").fetchone()[0]
     copies_target = conn.execute("SELECT COUNT(*) FROM tracks t JOIN metadata m USING (video_id) WHERE "
-                                 "t.status = 'downloaded' AND t.probe_codec = 'aac' AND m.needs_review = 0").fetchone()[0]
+                                 "t.status = 'downloaded' AND m.needs_review = 0").fetchone()[0]
     activity = {"sync": "downloading", "resolve": "tagging", "dedupe": "deduping"}.get(command or "", "")
     if command == "unknown":
         activity = "working"
@@ -683,6 +693,113 @@ def status(json_out: bool = typer.Option(False, "--json", help="Facts as JSON (f
     if extras:
         console.print()
         console.print("   ".join(extras))
+
+
+def _size(n: float) -> str:
+    return f"{n / 1e9:.1f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB"
+
+
+def _print_card(state: dict) -> None:
+    s = state["state"]
+    if s == "unregistered":
+        _header("Card", "no card registered")
+        if state["candidates"]:
+            g = _grid()
+            for v in state["candidates"]:
+                g.add_row(f"  [bold]{_esc(v['name'])}[/]", v["fs"], f"{_size(v['free_bytes'])} free", f"[dim]{v['mount']}[/]")
+            console.print(g)
+            console.print("\n  [dim]Register yours with: runsync card --register <mount path>[/]")
+        else:
+            console.print("  \u23f8\ufe0f No card found. Insert it and run again.")
+        return
+    if s == "not_inserted":
+        _header("Card", state["device"])
+        console.print("  \u23f8\ufe0f Not inserted")
+        return
+    _header("Card", f"{state['device']} \u00b7 {state['fs']} \u00b7 {_size(state['free_bytes'])} free")
+    console.print("  " + _stats(("\u2705", state["unchanged"], "!on the card already"), ("\u2795", state["adds"], "to add"),
+                               ("\U0001f504", state["updates"], "to update"), ("\U0001f5d1\ufe0f", state["removes"], "to remove")))
+    if state["adds"] or state["updates"]:
+        console.print(f"  [dim]{_size(state['add_bytes'])} to copy[/]")
+    for pl in state["playlists"]:
+        console.print(f"  [dim]\U0001f4cb {_esc(pl['name'])} \u00b7 {pl['tracks']} tracks[/]")
+    why = {"guard": "more than 20% of the card would be removed (needs --force)",
+           "space": "not enough free space on the card",
+           "conflict": f"files on the card have our names but are not ours: {', '.join(state.get('conflicts', [])[:3])}"}
+    if state["blocked"]:
+        console.print(f"  [red]\u274c Blocked: {why[state['blocked']]}[/]")
+    elif state["adds"] or state["updates"] or state["removes"]:
+        console.print(f"\n  To sync exactly this: [bold]runsync card --apply --confirm {state['plan_id']}[/]")
+    else:
+        console.print("\n  \u2705 The card is up to date.")
+
+
+@app.command()
+def card(register: str = typer.Option("", "--register", help="Mount path of a card to register, e.g. /Volumes/SD"),
+         name: str = typer.Option("shanling", "--name", help="Name for the card when registering."),
+         apply: bool = typer.Option(False, "--apply", help="Copy and remove files on the card (needs --confirm)."),
+         confirm: str = typer.Option("", "--confirm", help="With --apply: the plan id shown by the preview. Only that "
+                                     "exact plan is applied; any other is refused."),
+         force: bool = typer.Option(False, "--force", help="Allow removing more than 20% of the card."),
+         undo: bool = typer.Option(False, "--undo", help="Reverse the last finished sync."),
+         eject: bool = typer.Option(False, "--eject", help="Eject the card when done."),
+         json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
+    """Show the card and what a sync would do (nothing changes). --apply --confirm ID syncs it."""
+    console.stderr = json_out   # --json: facts on stdout, the human view on stderr
+    cfg, conn = _ctx()
+    setup_logging(cfg, "card")
+    volumes = candidate_volumes(cfg.library)
+    try:
+        if register:
+            info = volume_info(Path(register))
+            if info is None:
+                raise ValueError(f"{register} is not a mounted volume macOS can identify")
+            register_device(conn, info, name, cfg.library)
+            console.print(f"\u2705 Registered {_esc(name)}: {_esc(info.name)} ({info.fs}). Only this card will be written.")
+    except ValueError as exc:
+        console.print(f"[red]{_esc(str(exc))}[/]")
+        raise typer.Exit(2) from None
+    state = card_state(conn, cfg.library, volumes)
+    result: dict = {}
+    if (apply or undo) and state["state"] in ("ready", "blocked"):
+        dev = next(d for d in devices(conn) if d["id"] == state["device_id"])
+        mount, free = Path(state["mount"]), state["free_bytes"]
+        try:
+            with run_lock(cfg.library):
+                plan = build_card_plan(conn, dev["id"], mount, dev["subpath"], free, cfg.mass_delete_threshold)
+                if undo:
+                    r = undo_last_run(conn, dev["id"], mount, dev["subpath"], plan)
+                    result = {"undone": {"restored": r.added, "removed": r.removed}}
+                    console.print(f"\u21a9\ufe0f Undid the last sync: {r.removed} file(s) removed, {r.added} put back.")
+                else:
+                    if confirm != card_plan_id(plan):   # the gate is in the command, not only in the skill's instructions
+                        console.print(f"[red]Not confirmed.[/] --apply needs --confirm {card_plan_id(plan)} (the id of the "
+                                      "plan above); a plan that changed since you confirmed is refused. Nothing written.")
+                        raise typer.Exit(2)
+                    r = apply_card_plan(conn, dev["id"], mount, dev["subpath"], plan, force)
+                    result = {"applied": {"added": r.added, "updated": r.updated, "removed": r.removed, "bytes": r.bytes,
+                                          "playlists": r.playlists}}
+                    console.print(f"\u2705 Synced: {r.added} added, {r.updated} updated, {r.removed} removed "
+                                  f"({_size(r.bytes)} copied), {r.playlists} playlist file(s).")
+        except AlreadyRunning as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(3) from None
+        except (OSError, ValueError) as exc:
+            console.print(f"[red]{_esc(str(exc))}[/] Nothing more was written.")
+            raise typer.Exit(2) from None
+        state = card_state(conn, cfg.library, candidate_volumes(cfg.library))
+    elif apply or undo:
+        console.print("[red]No registered card is inserted.[/] Nothing written.")
+        raise typer.Exit(2)
+    if eject and state.get("mount"):
+        done = subprocess.run(["diskutil", "eject", state["mount"]], capture_output=True, text=True, check=False)
+        result["ejected"] = done.returncode == 0
+        console.print("\u23cf\ufe0f Ejected. Safe to remove the card." if done.returncode == 0
+                      else f"[yellow]Could not eject: {_esc(done.stderr.strip()[:120])}[/]")
+    if json_out:
+        sys.stdout.write(json.dumps({**state, **result}) + "\n")
+        return
+    _print_card(state)
 
 
 def _clip(text: str, width: int = 72) -> str:

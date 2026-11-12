@@ -12,7 +12,7 @@ See [PLAN.md](PLAN.md) for the build plan and locked decisions, [phase0-findings
 | 1 | Playlist discovery, fetch, diff, download to `master/` | Done; checkpoint passed on the real playlists (edge-case batch still to fix) |
 | 2a | Metadata, language, covers, tagged player copies, web-search enrichment via a Claude Code skill (no API key) | Built; awaiting the review checkpoint |
 | 3 | Dedupe | Done; run on the real library (96 duplicates removed) |
-| 4 | Player build and safe sync to the card | Not started |
+| 4 | Player build and safe sync to the card | Built and tested without a card; awaiting the first real card sync |
 | 5 | Status, doctor, launchd automation, full import | Not started |
 
 ## Requirements
@@ -58,9 +58,10 @@ The interface is Claude Code skills. Open Claude Code in this repo and say what 
 | "choose playlists" | `runsync-playlists` | lists them (✅ syncing), asks which to start or stop |
 | "enrich my library" | `runsync-enrich` | web-searches what the code could not settle |
 | "status" / "how is it going" | `runsync-status` | progress at a glance; schedule it with `/loop 5m /runsync-status` during a long download |
+| "sync to the card" | `runsync-sync-card` | registers your microSD card once, previews what changes, syncs only the confirmed plan, offers to eject |
 | "remove duplicates" | `runsync-dedupe` | finds the same song uploaded twice, asks about doubtful pairs, deletes the extra |
 
-The skills drive six commands (most take `--json`, which they use to present results), which you can also run yourself:
+The skills drive seven commands (most take `--json`, which they use to present results), which you can also run yourself:
 
 ```
 uv run runsync playlists                       # numbered list: ✅ syncing, ⬜ not
@@ -74,6 +75,8 @@ uv run runsync resolve                         # tags, covers, ReplayGain, playe
 uv run runsync resolve --redo                  # re-resolve every track (your corrections still win)
 uv run runsync status                          # progress bar, rate and time left
 uv run runsync dedupe                          # show duplicates (nothing changes)
+uv run runsync card                            # the registered card and what a sync would do (nothing changes)
+uv run runsync card --apply --confirm ID       # sync exactly the previewed plan; --undo reverses the last sync, --eject when done
 uv run runsync dedupe --apply --confirm ID     # delete exactly the previewed plan for good (the preview prints ID); --undo ID brings one back
 ```
 
@@ -102,7 +105,8 @@ Default location `~/Music/RunSync` (override with `RUNSYNC_HOME`):
 master/          untouched best audio stream per video ID
 .trash/          removed tracks, purged after 14 days
 state.db         SQLite state
-player/m4a/      tagged player copies (title-only plain-letter names), derived from master/
+player/m4a/      tagged AAC player copies (title-only plain-letter names), derived from master/
+player/flac/     FLAC copies of the Opus and AC-3 masters
 enrich.csv       rows waiting for the runsync-enrich skill (web search)
 review.csv       tracks that need a human look
 cache/covers/    downloaded cover art

@@ -208,6 +208,14 @@ devices:
 
 **Goal:** card always matches the playlists, without ever hurting the card.
 
+> **Status: built and tested without a card (`runsync card` + the `runsync-sync-card` skill); the first real card sync is the human checkpoint.** Decisions made while building:
+> - Opus and AC-3 masters are decoded to FLAC into `player/flac/` (lossless, so nothing is re-encoded lossy to lossy); file names are unique across both folders.
+> - A card is identified by its volume UUID (read-only `diskutil info -plist`), registered once; the Mac's own disk and internal fixed volumes are never offered or accepted.
+> - The manifest (`device_tracks`) is the only thing ever deleted from; a file with our name that is not ours is never overwritten (an identical one is adopted, a different one blocks the plan).
+> - Writes go through `<name>.runsync-tmp` (fsync, size and checksum verified, then renamed); the next run finishes an interrupted one. Playlists are one M3U8 per selected playlist next to the audio (UTF-8, relative names), to be revisited after the card test.
+> - `card --apply` needs `--confirm <plan id>` of the exact plan previewed (same gate as `dedupe --apply`); >20% removals and low free space block the plan; `--undo` reverses the last run (re-tagged updates are not reverted).
+> - Tested with temporary folders standing in for the card; no disk image or test volume is ever created.
+
 **Build**
 1. Player-copy builder: M4A copy as-is; Opus → FLAC; embed tags + cover; cache per format profile
 2. M3U8 per playlist: UTF-8, relative paths, only successfully downloaded tracks

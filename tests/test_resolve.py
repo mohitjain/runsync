@@ -180,17 +180,22 @@ def test_one_bad_track_does_not_stop_the_run(cfg, lib, monkeypatch):
 
 
 @needs_ffmpeg
-def test_opus_master_and_unholdable_title_get_no_player_copy(cfg, lib):
-    (cfg.master / "o.webm").write_bytes(b"opus")
+def test_opus_master_gets_a_flac_copy_and_an_unholdable_title_is_held(cfg, lib):
+    from conftest import make_audio
+    from mutagen.flac import FLAC
+    make_audio(cfg.master / "o.webm", "libopus")
     add_track(lib, "o", cfg.master / "o.webm", **YT)
     add_track(lib, "d", make_m4a(cfg.master / "d.m4a"), original_title="Привет", yt_track="Привет",
               yt_artist="Arijit Singh", channel="Arijit Singh")
     rep = Rec()
     res = run_resolve(cfg, lib, http=FakeHttp(), rep=rep, cover_fn=no_cover, analyse_fn=fake_gain)
-    assert res.built == 0 and res.build_skipped == 1 and res.held == 1
+    assert res.built == 1 and res.held == 1 and res.build_skipped == 0
     assert "cannot show" in meta(lib, "d")["review_reason"]
-    assert any("Phase 4" in r for _, r in rep.skipped_)
-    assert not (cfg.player / "m4a").exists() or not list((cfg.player / "m4a").glob("*.m4a"))
+    flac = cfg.player / "flac" / "In Pieces.flac"
+    assert flac.exists() and FLAC(flac)["VIDEO_ID"] == ["o"]
+    row = lib.execute("SELECT player_format, player_path FROM tracks WHERE video_id = 'o'").fetchone()
+    assert (row["player_format"], row["player_path"]) == ("flac", str(flac))
+    assert not list((cfg.player / "m4a").glob("*.m4a"))
 
 
 def test_review_csv_fixes_become_overrides_and_are_applied_next_run(cfg, lib):
