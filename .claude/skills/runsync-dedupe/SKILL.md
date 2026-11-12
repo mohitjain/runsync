@@ -110,7 +110,8 @@ One icon table, header "Duplicates", rows only for what applies:
 | 🎵 | Player copies rebuilt |
 
 Nothing found: a single row `| ⬜ | No duplicates |`. If anything failed, a ❌ row with the reason. Under the table, one
-line: "A wrong merge can be undone: `uv run runsync dedupe --undo <video id>` queues it for download again."
+line: "A wrong merge can be undone with `uv run runsync dedupe --undo <video id>` (it downloads again) until the YouTube
+cleanup removes the duplicate from your playlists; after that the database has forgotten it."
 
 ## Rules
 

@@ -64,7 +64,7 @@ def test_normalize_drops_noise_and_keeps_words():
 def test_the_search_query_drops_upload_noise_but_keeps_live_remix_and_remaster():
     assert ytsearch.query_for("Kiss - I was made for lovin' you -official video clip (HD)") == "kiss i was made for lovin you"
     assert ytsearch.query_for("Alone (Live)") == "alone live"
-    assert ytsearch.query_for("Alive (2004 Remix)") == "alive remix"
+    assert ytsearch.query_for("Alive (2004 Remix)") == "alive 2004 remix"      # the year and name stay: they pick the recording
 
 
 # ---- the add plan -----------------------------------------------------------------------------------------------------
@@ -75,10 +75,10 @@ def mine(monkeypatch, *titles):
 
 def test_add_plan_skips_songs_already_in_the_playlist_and_repeated_ids(conn, monkeypatch):
     mine(monkeypatch, "rerunsync", "Running")
-    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: entries("old"))
-    plan, skipped = ytclean.build_add_plan(object(), conn, ["new1", "old", "new1", "new2"], "rerunsync", titles={"new1": "One"})
-    assert [(o.kind, o.video_id, o.title) for o in plan.ops] == [("add", "new1", "One"), ("add", "new2", "")]
-    assert skipped == [{"video_id": "old", "why": "already in the playlist"}] and plan.playlists == {"PL0": "rerunsync"}
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: entries("oldsong0001"))
+    plan, skipped = ytclean.build_add_plan(object(), conn, ["newsong0002", "oldsong0001", "newsong0002", "newsong0003"], "rerunsync", titles={"newsong0002": "One"})
+    assert [(o.kind, o.video_id, o.title) for o in plan.ops] == [("add", "newsong0002", "One"), ("add", "newsong0003", "")]
+    assert skipped == [{"video_id": "oldsong0001", "why": "already in the playlist"}] and plan.playlists == {"PL0": "rerunsync"}
 
 
 def test_add_plan_for_a_missing_playlist_needs_create_and_then_makes_it_first(conn, monkeypatch):
@@ -137,7 +137,7 @@ def cli_env(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(yt, "_http", lambda method, url, headers, body: calls.append((method, url)) or (200, {"id": "NEWID"}))
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PLx", "title": "Running", "count": 1}])
-    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: entries("old"))
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: entries("oldsong0001"))
     monkeypatch.setattr(ytsearch, "ytdlp_search", lambda q, n=6: [r("a", "Found Song", "Artist")])
     monkeypatch.setattr(ytsearch, "video_titles", lambda ids, lookup=None: {v: f"Title of {v}" for v in ids})
     return cli, calls
@@ -157,16 +157,77 @@ def test_search_command_lists_candidates_without_any_api_call(cli_env, monkeypat
 
 def test_add_through_the_command_previews_then_needs_the_exact_plan_id(cli_env):
     cli, calls = cli_env
-    prev = json.loads(_run(cli, "--add", "n1,old", "--to", "Running", "--json").stdout)["add"]
-    assert [v["video_id"] for v in prev["videos"]] == ["n1"] and prev["skipped"][0]["video_id"] == "old" and calls == []
-    refused = _run(cli, "--add", "n1", "--to", "Running", "--apply", "--confirm", "wrong", "--json")
+    prev = json.loads(_run(cli, "--add", "newsong0001,oldsong0001", "--to", "Running", "--json").stdout)["add"]
+    assert [v["video_id"] for v in prev["videos"]] == ["newsong0001"] and prev["skipped"][0]["video_id"] == "oldsong0001" and calls == []
+    refused = _run(cli, "--add", "newsong0001", "--to", "Running", "--apply", "--confirm", "wrong", "--json")
     assert refused.exit_code == 2 and calls == []
-    ok = _run(cli, "--add", "n1,old", "--to", "Running", "--apply", "--confirm", prev["plan_id"], "--json")
+    ok = _run(cli, "--add", "newsong0001,oldsong0001", "--to", "Running", "--apply", "--confirm", prev["plan_id"], "--json")
     assert ok.exit_code == 0 and json.loads(ok.stdout)["applied"]["added"] == 1 and [c[0] for c in calls] == ["POST"]
 
 
 def test_add_without_a_playlist_or_with_an_unknown_one_is_refused(cli_env):
     cli, calls = cli_env
-    assert _run(cli, "--add", "n1", "--json").exit_code == 2
-    out = _run(cli, "--add", "n1", "--to", "Nope", "--json")
+    assert _run(cli, "--add", "newsong0001", "--json").exit_code == 2
+    out = _run(cli, "--add", "newsong0001", "--to", "Nope", "--json")
     assert out.exit_code == 2 and "No playlist called" in json.loads(out.stdout)["error"] and calls == []
+
+
+# ---- the owner's picks live in the database ---------------------------------------------------------------------------
+
+def lost_kiss(conn):
+    add_track(conn, "kiss0000001", "Kiss - I was made for lovin' you -official video clip (HD)", "unavailable")
+    add_track(conn, "kiss0000002", "Kiss - I was made for loving you", "unavailable")      # a spelling apart: the same song
+    add_track(conn, "paisa000001", "Paisa", "unavailable")
+
+
+def test_titles_a_spelling_apart_are_one_song_with_several_lost_ids(conn):
+    lost_kiss(conn)
+    songs, _ = ytsearch.lost_songs(conn)
+    assert [(s.title[:4], s.ids) for s in songs] == [("Kiss", ["kiss0000001", "kiss0000002"]), ("Pais", ["paisa000001"])]
+
+
+def test_a_pick_covers_every_upload_of_the_song_and_it_is_not_asked_again(conn):
+    lost_kiss(conn)
+    assert ytsearch.record_pick(conn, "kiss0000001", "upload00001", "Kiss - Lovin' You") == ["kiss0000001", "kiss0000002"]
+    ytsearch.record_skip(conn, "paisa000001")
+    assert ytsearch.lost_songs(conn)[0] == []                      # both decided: nothing left to ask
+    assert ytsearch.pick_counts(conn) == {"picked": 1, "skipped": 1}
+
+
+def test_the_command_saves_picks_and_skips_without_touching_youtube(cli_env):
+    from runsync import db
+    from runsync.config import load_config
+    cli, calls = cli_env
+    cfg = load_config()
+    cfg.ensure_dirs()
+    c = db.connect(cfg.db_path)
+    lost_kiss(c)
+    c.commit()
+    saved = json.loads(_run(cli, "--pick", "kiss0000001:upload00001", "--skip", "paisa000001", "--json").stdout)
+    assert saved["saved"][0]["lost"] == ["kiss0000001", "kiss0000002"] and saved["picks"] == {"picked": 1, "skipped": 1} and calls == []
+
+
+def test_replacements_leave_out_songs_already_decided(cli_env, monkeypatch):
+    from runsync import db
+    from runsync.config import load_config
+    cli, _ = cli_env
+    cfg = load_config()
+    cfg.ensure_dirs()
+    c = db.connect(cfg.db_path)
+    lost_kiss(c)
+    c.commit()
+    monkeypatch.setattr(ytsearch, "candidates", lambda q, n=5, search=None: [])
+    first = json.loads(_run(cli, "--replacements", "--json").stdout)["replacements"]
+    assert [s["title"][:4] for s in first["songs"]] == ["Kiss", "Pais"] and first["songs"][0]["ids"] == ["kiss0000001", "kiss0000002"]
+    _run(cli, "--pick", "paisa000001:upload00009", "--json")
+    second = json.loads(_run(cli, "--replacements", "--json").stdout)["replacements"]
+    assert [s["title"][:4] for s in second["songs"]] == ["Kiss"] and second["decided"] == {"picked": 1}
+
+
+def test_only_real_video_ids_reach_ytdlp_or_the_api(cli_env):
+    cli, calls = cli_env
+    for args in (["--pick", "abcdefghijk:not-an-id"], ["--pick", "short:abcdefghijk"], ["--skip", "../../etc"],
+                 ["--add", "abcdefghijk,https://evil.example/x", "--to", "Running"]):
+        out = _run(cli, *args, "--json")
+        assert out.exit_code == 2 and "not a YouTube video id" in json.loads(out.stdout)["error"], args
+    assert calls == []

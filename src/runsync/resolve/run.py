@@ -5,16 +5,15 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from ..config import Config
-from ..db import log_event
 from ..player import ascii_name, build_player_copy, read_video_id
+from ..util import now_iso
 from . import covers, gain
 from .artists import label_artist, text_language
 from .enrich import export_enrich, import_enrich
-from .model import REVIEW_BELOW, Candidate
+from .model import REVIEW_BELOW, TRUST, Candidate
 from .net import Http
 from .overrides import import_review_fixes, load_overrides, write_review
 from .parse import key
@@ -64,10 +63,6 @@ class ResolveResult:
                 "tracks": list(self.tracks.values())}
 
 
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds")   # resolve vs build order must be exact
-
-
 def _pick(cands: list[Candidate]) -> Candidate:
     best = max(cands, key=lambda c: (c.confidence, c.trust))
     for other in cands:  # fill gaps from candidates that agree on the title
@@ -103,12 +98,21 @@ def _track_languages(conn, best: Candidate, row, spec: dict | None, http, overri
     return labels[0][:1] if labels and labels[0] else []   # the lead artist decides; collaborators do not vote
 
 
+_NOT_BUILT = {"file": None, "format": None, "size": None, "cover": None, "gain_db": None}
+
+
 def _track_record(vid: str, original_title: str | None, cand: Candidate, languages: list[str], review: str | None) -> dict:
     """What this run decided for one track (the skills list it). Build facts are added later by _build_all."""
     return {"id": vid, "before": original_title or "", "artist": ", ".join(cand.artists[:3]), "title": cand.title,
             "album": cand.album, "year": cand.year, "language": "/".join(languages) or None, "tier": cand.tier,
-            "confidence": round(cand.confidence, 2), "review": review, "file": None, "format": None, "size": None,
-            "cover": None, "gain_db": None}
+            "confidence": round(cand.confidence, 2), "review": review, **_NOT_BUILT}
+
+
+def _stored_record(r, review: str | None) -> dict:
+    """The same record, from a metadata row (for tracks resolved in an earlier run)."""
+    return {"id": r["video_id"], "before": r["original_title"] or "", "artist": r["artist"], "title": r["title"],
+            "album": r["album"], "year": r["year"], "language": r["language"], "tier": r["source_tier"],
+            "confidence": r["confidence"], "review": review, **_NOT_BUILT}
 
 
 def _review_reason(cand: Candidate, languages: list[str], title_ok: bool) -> str | None:
@@ -140,23 +144,28 @@ def _store(conn: sqlite3.Connection, row, cand: Candidate, languages: list[str],
          cand.album, cand.year, languages[0] if languages else None, json.dumps(languages),
          json.dumps(cand.versions), row["original_title"], cand.confidence, cand.tier,
          1 if cand.tier == "override" else 0, 1 if review else 0, review,
-         cand.extra.get("mb_recording_id"), cand.extra.get("mb_release_id"), _now()))
+         cand.extra.get("mb_recording_id"), cand.extra.get("mb_release_id"), now_iso(precise=True)))
+
+
+def _needs_resolving(r, overrides: dict, labelled: set[str], online: bool, redo: bool) -> bool:
+    """New tracks, and old ones something changed for: an override or artist label arrived, or a review row can be retried."""
+    if r["m_vid"] is None:
+        return True
+    has_override = r["video_id"] in overrides["tracks"]
+    lead = key((r["m_artist"] or "").split(",")[0])
+    newly_labelled = r["m_lang"] is None and not r["m_review"] and lead in labelled
+    unlocked = not r["m_locked"]
+    return (newly_labelled or (redo and unlocked) or (has_override and unlocked) or (bool(r["m_review"]) and online)
+            or (has_override and r["m_tier"] != "override"))
 
 
 def _select_rows(conn: sqlite3.Connection, overrides: dict, limit: int | None, online: bool, redo: bool = False):
     rows = conn.execute(
-        "SELECT t.*, m.video_id AS m_vid, m.locked AS m_locked, m.needs_review AS m_review, "
-        "m.source_tier AS m_tier, m.confidence AS m_conf, m.language AS m_lang, m.artist AS m_artist FROM tracks t LEFT JOIN metadata m USING (video_id) "
-        "WHERE t.status = 'downloaded' ORDER BY t.downloaded_at, t.video_id").fetchall()
+        "SELECT t.*, m.video_id AS m_vid, m.locked AS m_locked, m.needs_review AS m_review, m.source_tier AS m_tier, "
+        "m.confidence AS m_conf, m.language AS m_lang, m.artist AS m_artist FROM tracks t "
+        "LEFT JOIN metadata m USING (video_id) WHERE t.status = 'downloaded' ORDER BY t.downloaded_at, t.video_id").fetchall()
     labelled = {key(n) for n, spec in overrides["artists"].items() if (spec or {}).get("languages")}
-    out = []
-    for r in rows:
-        has_override = r["video_id"] in overrides["tracks"]
-        lead = key((r["m_artist"] or "").split(",")[0])
-        newly_labelled = bool(r["m_vid"]) and r["m_lang"] is None and not r["m_review"] and lead in labelled
-        if r["m_vid"] is None or newly_labelled or (redo and not r["m_locked"]) or (has_override and not r["m_locked"]) or (r["m_review"] and online) or \
-                (has_override and r["m_tier"] != "override"):
-            out.append(r)
+    out = [r for r in rows if _needs_resolving(r, overrides, labelled, online, redo)]
     return out[:limit] if limit else out
 
 
@@ -193,24 +202,12 @@ def run_resolve(cfg: Config, conn: sqlite3.Connection, *, dry_run: bool = False,
             review = _review_reason(best, languages, title_ok)
             if best.artists and not languages:
                 res.unlabelled[best.artists[0]] = res.unlabelled.get(best.artists[0], 0) + 1
-            if dry_run:
-                rep.resolved(vid, row["original_title"] or "", best, review, tuple(languages))
-                res.tracks[vid] = _track_record(vid, row["original_title"], best, languages, review)
-                res.resolved += 1
-                res.by_tier[best.tier] = res.by_tier.get(best.tier, 0) + 1
-                res.review += 1 if review else 0
-                continue
-            for c in cands:
-                conn.execute("INSERT INTO metadata_candidates (video_id, at, tier, artist, title, album, year, "
-                             "confidence, detail) VALUES (?,?,?,?,?,?,?,?,?)",
-                             (vid, _now(), c.tier, c.artist, c.title, c.album, c.year, c.confidence,
-                              json.dumps({"artists": c.artists, "hints": c.hints, "note": c.note, **c.extra})))
-            _store(conn, row, best, languages, review)
-            log_event(conn, vid, "resolved", {"tier": best.tier, "confidence": best.confidence, "review": review})
-            conn.commit()
+            if not dry_run:
+                _store(conn, row, best, languages, review)
+                conn.commit()
             res.resolved += 1
             res.by_tier[best.tier] = res.by_tier.get(best.tier, 0) + 1
-            res.review += 1 if review else 0
+            res.review += bool(review)
             rep.resolved(vid, row["original_title"] or "", best, review, tuple(languages))
             res.tracks[vid] = _track_record(vid, row["original_title"], best, languages, review)
         except Exception as e:  # one bad track never stops the run
@@ -228,74 +225,77 @@ def run_resolve(cfg: Config, conn: sqlite3.Connection, *, dry_run: bool = False,
 
 
 def _trust(tier: str) -> int:
-    from .model import TRUST
     return TRUST.get(tier, 0)
 
 
-def _build_all(cfg, conn, res, rep, cover_fn, analyse_fn, online: bool) -> None:
+def _ensure_cover(conn, cfg: Config, r, res: ResolveResult, cover_fn, online: bool) -> Path | None:
+    """The cover to embed: the stored one, or (online) a fresh lookup that is then stored."""
+    if r["cover_path"]:
+        return Path(r["cover_path"])
+    if not online:
+        return None
+    got = cover_fn(r["video_id"], cfg.cache / "covers", r["mb_release_id"], None)
+    if not got:
+        return None
+    conn.execute("UPDATE metadata SET cover_path = ?, cover_source = ? WHERE video_id = ?", (str(got[0]), got[1], r["video_id"]))
+    res.covers += 1
+    return got[0]
+
+
+def _ensure_gain(conn, r, master: Path, analyse_fn) -> None:
+    if r["replaygain_gain_db"] is not None:
+        return
+    g = analyse_fn(master)
+    if g:
+        conn.execute("UPDATE metadata SET loudness_lufs=?, replaygain_gain_db=?, replaygain_peak=? WHERE video_id = ?",
+                     (g["loudness_lufs"], g["replaygain_gain_db"], g["replaygain_peak"], r["video_id"]))
+
+
+def _build_one(cfg: Config, conn, r, res: ResolveResult, rep, cover_fn, analyse_fn, online: bool) -> None:
+    vid = r["video_id"]
+    master = Path(r["master_path"] or "")
+    if not master.exists():
+        rep.skipped(vid, "master file missing")
+        return
+    cover = _ensure_cover(conn, cfg, r, res, cover_fn, online)
+    _ensure_gain(conn, r, master, analyse_fn)
+    meta = dict(conn.execute("SELECT * FROM metadata WHERE video_id = ?", (vid,)).fetchone())
+    out = build_player_copy(master, cfg.player / "m4a", vid, meta, cover, flac_dir=cfg.player / "flac")
+    if "skipped" in out:
+        res.build_skipped += 1
+        rep.skipped(vid, out["skipped"])
+        return
+    old = Path(r["player_path"]) if r["player_path"] else None
+    if old and old != out["path"] and old.exists() and read_video_id(old) == vid:
+        old.unlink()   # renamed after a re-resolve: remove our own stale derived copy, never a master
+    conn.execute("UPDATE tracks SET clean_filename=?, player_path=?, player_format=?, player_size_bytes=?, "
+                 "player_built_at=? WHERE video_id = ?",
+                 (out["filename"], str(out["path"]), out["format"], out["size"], now_iso(precise=True), vid))
+    conn.commit()
+    res.built += 1
+    rep.built(vid, out["filename"], out["size"])
+    now = conn.execute("SELECT cover_source, replaygain_gain_db FROM metadata WHERE video_id = ?", (vid,)).fetchone()
+    res.tracks.setdefault(vid, _stored_record(r, None)).update(
+        {"file": out["filename"], "format": out["format"], "size": out["size"], "cover": now["cover_source"],
+         "gain_db": round(now["replaygain_gain_db"], 2) if now["replaygain_gain_db"] is not None else None})
+
+
+def _build_all(cfg: Config, conn, res: ResolveResult, rep, cover_fn, analyse_fn, online: bool) -> None:
+    """Player copies for every resolved track that has none yet or was re-resolved since its copy was built."""
     rows = conn.execute(
         "SELECT t.video_id, t.master_path, t.player_path, m.* FROM tracks t JOIN metadata m USING (video_id) "
-        "WHERE t.status = 'downloaded' AND (t.player_path IS NULL OR m.resolved_at > COALESCE("
-        "(SELECT MAX(at) FROM track_events e WHERE e.video_id = t.video_id AND e.event = 'player_built'), ''))"
+        "WHERE t.status = 'downloaded' AND (t.player_path IS NULL OR m.resolved_at > COALESCE(t.player_built_at, ''))"
     ).fetchall()
     for r in rows:
-        vid = r["video_id"]
         if r["needs_review"]:
             res.held += 1
-            res.tracks.setdefault(vid, {"id": vid, "before": "", "artist": r["artist"], "title": r["title"],
-                                        "album": r["album"], "year": r["year"], "language": r["language"],
-                                        "tier": r["source_tier"], "confidence": r["confidence"],
-                                        "review": r["review_reason"], "file": None, "format": None, "size": None,
-                                        "cover": None, "gain_db": None})
-            continue
-        master = Path(r["master_path"] or "")
-        if not master.exists():
-            rep.skipped(vid, "master file missing")
+            res.tracks.setdefault(r["video_id"], _stored_record(r, r["review_reason"]))
             continue
         try:
-            cover = None
-            if online and not r["cover_path"]:
-                got = cover_fn(vid, cfg.cache / "covers", r["mb_release_id"], None)
-                if got:
-                    cover = got[0]
-                    conn.execute("UPDATE metadata SET cover_path = ?, cover_source = ? WHERE video_id = ?",
-                                 (str(got[0]), got[1], vid))
-                    res.covers += 1
-            elif r["cover_path"]:
-                cover = Path(r["cover_path"])
-            if r["replaygain_gain_db"] is None:
-                g = analyse_fn(master)
-                if g:
-                    conn.execute("UPDATE metadata SET loudness_lufs=?, replaygain_gain_db=?, replaygain_peak=? "
-                                 "WHERE video_id = ?", (g["loudness_lufs"], g["replaygain_gain_db"],
-                                                         g["replaygain_peak"], vid))
-            m = dict(conn.execute("SELECT * FROM metadata WHERE video_id = ?", (vid,)).fetchone())
-            out = build_player_copy(master, cfg.player / "m4a", vid, m, cover, flac_dir=cfg.player / "flac")
-            if "skipped" in out:
-                res.build_skipped += 1
-                rep.skipped(vid, out["skipped"])
-                continue
-            old = Path(r["player_path"]) if r["player_path"] else None
-            if old and old != out["path"] and old.exists() and read_video_id(old) == vid:
-                old.unlink()   # renamed after a re-resolve: remove our own stale derived copy, never a master
-            conn.execute("UPDATE tracks SET clean_filename=?, player_path=?, player_format=?, "
-                         "player_size_bytes=? WHERE video_id = ?",
-                         (out["filename"], str(out["path"]), out["format"], out["size"], vid))
-            log_event(conn, vid, "player_built", {"file": out["filename"]})
-            conn.commit()
-            res.built += 1
-            rep.built(vid, out["filename"], out["size"])
-            rec = res.tracks.setdefault(vid, {"id": vid, "before": r["original_title"] or "",
-                                              "artist": r["artist"], "title": r["title"], "album": r["album"],
-                                              "year": r["year"], "language": r["language"], "tier": r["source_tier"],
-                                              "confidence": r["confidence"], "review": None})
-            m2 = conn.execute("SELECT cover_source, replaygain_gain_db FROM metadata WHERE video_id = ?", (vid,)).fetchone()
-            rec.update({"file": out["filename"], "format": out["format"], "size": out["size"],
-                        "cover": m2["cover_source"] if m2 else None,
-                        "gain_db": round(m2["replaygain_gain_db"], 2) if m2 and m2["replaygain_gain_db"] is not None else None})
+            _build_one(cfg, conn, r, res, rep, cover_fn, analyse_fn, online)
         except Exception as e:
-            log.exception("player build failed for %s", vid)
-            rep.warn(f"{vid}: build failed: {type(e).__name__}: {e}")
+            log.exception("player build failed for %s", r["video_id"])
+            rep.warn(f"{r['video_id']}: build failed: {type(e).__name__}: {e}")
 
 
 def _write_review(cfg: Config, conn: sqlite3.Connection) -> None:

@@ -221,7 +221,7 @@ def test_a_pulled_card_mid_sync_is_finished_cleanly_by_the_next_run(w):
     w.apply(p)
     assert [n for n in w.on_card() if n.endswith(".m4a")] == [f"Song{i}.m4a" for i in range(4)]
     assert not any(n.endswith(card.TMP_SUFFIX) for n in w.on_card())
-    assert w.conn.execute("SELECT status FROM card_runs ORDER BY id").fetchall()[0][0] == "interrupted"
+    assert [r[0] for r in w.conn.execute("SELECT status FROM card_runs")] == ["done"]      # the interrupted run is not kept
     assert w.plan().changes == 0
 
 
@@ -279,7 +279,7 @@ def test_undo_reverses_the_last_run_only(w):
     res = undo_last_run(w.conn, w.dev, w.mount, "Music", w.plan())
     assert [n for n in w.on_card() if n.endswith(".m4a")] == ["Alpha.m4a", "Beta.m4a"]
     assert (res.added, res.removed) == (1, 1)
-    assert w.conn.execute("SELECT status FROM card_runs ORDER BY id").fetchall()[1][0] == "undone"
+    assert [r[0] for r in w.conn.execute("SELECT status FROM card_runs")] == ["undone"]   # only the last run is kept at all
     with pytest.raises(ValueError, match="nothing to undo"):
         undo_last_run(w.conn, 999, w.mount, "Music")
 

@@ -68,26 +68,29 @@ def _existing(dirs: list[Path], base: str) -> Path | None:
     return None
 
 
-def _pick_path(dest_dir: Path, video_id: str, meta: dict, ext: str = "m4a", others: list[Path] | None = None
-               ) -> Path | dict:
-    """Title-only name. If another video already owns it: a different artist gets `Title (Artist)`,
-    the same artist means it is a duplicate (Phase 3 decides which to keep). `others` are the other format
-    folders, so `Title.m4a` and `Title.flac` can never both exist for different tracks."""
-    dirs = [dest_dir, *(others or [])]
+class Skip(Exception):
+    """This track gets no player copy; the message says why (shown to the owner)."""
+
+
+def _pick_path(dest_dir: Path, video_id: str, meta: dict, ext: str, others: list[Path]) -> Path:
+    """Title-only name. If another video already owns it: a different artist gets `Title (Artist)`, the same artist
+    means it is a duplicate (run dedupe to keep one). `others` are the other format folders, so `Title.m4a` and
+    `Title.flac` can never both exist for different tracks. Raises Skip when no honest name exists."""
+    dirs = [dest_dir, *others]
     base = safe_filename(meta["title"])
     if base is None:
-        return {"skipped": "title has letters the player file name cannot hold"}
+        raise Skip("title has letters the player file name cannot hold")
     owner = _existing(dirs, base)
     if owner is None or read_video_id(owner) == video_id:
         return dest_dir / f"{base}.{ext}"
     if (_read(owner, "\xa9ART") or "").casefold() == meta["artist"].casefold():
-        return {"skipped": f"duplicate of '{owner.name}' (same title and artist; deciding which to keep is Phase 3)"}
+        raise Skip(f"duplicate of '{owner.name}' (same title and artist; run dedupe to keep one)")
     with_artist = safe_filename(meta["title"], meta["artist"])
     if with_artist is None:
-        return {"skipped": "same title as another song and the artist name has letters the file name cannot hold"}
+        raise Skip("same title as another song and the artist name has letters the file name cannot hold")
     owner = _existing(dirs, with_artist)
     if owner is not None and read_video_id(owner) != video_id:
-        return {"skipped": f"duplicate of '{owner.name}' (same title and artist; deciding which to keep is Phase 3)"}
+        raise Skip(f"duplicate of '{owner.name}' (same title and artist; run dedupe to keep one)")
     return dest_dir / f"{with_artist}.{ext}"
 
 
@@ -124,8 +127,6 @@ def _build_flac(master: Path, flac_dir: Path, video_id: str, meta: dict, cover: 
     """Decode a non-AAC master (Opus, AC-3 ...) to FLAC: lossless, so nothing is re-encoded lossy to lossy."""
     flac_dir.mkdir(parents=True, exist_ok=True)
     final = _pick_path(flac_dir, video_id, meta, "flac", others)
-    if isinstance(final, dict):
-        return final
     tmp_dir = flac_dir / ".tmp"
     tmp_dir.mkdir(exist_ok=True)
     tmp = tmp_dir / f"{video_id}.flac"
@@ -134,7 +135,7 @@ def _build_flac(master: Path, flac_dir: Path, video_id: str, meta: dict, cover: 
                             "-vn", "-sample_fmt", "s16", "-c:a", "flac", "-compression_level", "8", str(tmp)],
                            capture_output=True, text=True, timeout=600, check=False)
         if r.returncode != 0 or not tmp.exists():
-            return {"skipped": f"could not convert to FLAC: {(r.stderr or '').strip()[-120:]}"}
+            raise Skip(f"could not convert to FLAC: {(r.stderr or '').strip()[-120:]}")
         _write_flac_tags(tmp, video_id, meta, cover)
         os.replace(tmp, final)
     finally:
@@ -142,32 +143,17 @@ def _build_flac(master: Path, flac_dir: Path, video_id: str, meta: dict, cover: 
     return {"path": final, "filename": final.name, "size": final.stat().st_size, "format": "flac"}
 
 
-def build_player_copy(master: Path, dest_dir: Path, video_id: str, meta: dict, cover: Path | None,
-                      flac_dir: Path | None = None) -> dict:
-    """Player copy with clean tags: AAC masters are copied as they are into dest_dir; anything else (Opus, AC-3 ...)
-    is decoded to FLAC into flac_dir (skipped when no flac_dir is given).
-    Returns {path, filename, size, format} or {skipped: reason}."""
-    if safe_filename(meta["title"]) is None:   # cheapest check first, whatever the audio is
-        return {"skipped": "title has letters the player file name cannot hold"}
-    others = [flac_dir] if flac_dir else []
-    facts = probe(master) if master.exists() else None
-    is_aac = master.suffix.lower() == ".m4a" and bool(facts) and facts["codec"] == "aac"
-    if not is_aac:
-        if flac_dir is None:
-            what = (facts or {}).get("codec") or master.suffix.lstrip(".") or "unknown"
-            return {"skipped": f"{what} audio: needs conversion to FLAC (Phase 4)"}
-        return _build_flac(master, flac_dir, video_id, meta, cover, [dest_dir])
+def _build_m4a(master: Path, dest_dir: Path, video_id: str, meta: dict, cover: Path | None, others: list[Path]) -> dict:
+    """An AAC master is copied as it is, with clean tags: whatever YouTube embedded is not trusted."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     final = _pick_path(dest_dir, video_id, meta, "m4a", others)
-    if isinstance(final, dict):
-        return final
     tmp_dir = dest_dir / ".tmp"
     tmp_dir.mkdir(exist_ok=True)
     tmp = tmp_dir / f"{video_id}.m4a"
     shutil.copyfile(master, tmp)
     try:
         f = MP4(tmp)
-        f.delete()  # start from clean tags: whatever YouTube embedded is not trusted
+        f.delete()
         tags = f.tags if f.tags is not None else f.add_tags() or f.tags
         tags["\xa9nam"] = [meta["title"]]
         tags["\xa9ART"] = [meta["artist"]]
@@ -191,3 +177,20 @@ def build_player_copy(master: Path, dest_dir: Path, video_id: str, meta: dict, c
     finally:
         tmp.unlink(missing_ok=True)
     return {"path": final, "filename": final.name, "size": final.stat().st_size, "format": "m4a"}
+
+
+def build_player_copy(master: Path, dest_dir: Path, video_id: str, meta: dict, cover: Path | None,
+                      flac_dir: Path | None = None) -> dict:
+    """Player copy with clean tags: AAC masters are copied as they are into dest_dir; anything else (Opus, AC-3 ...)
+    is decoded to FLAC into flac_dir (default: the folder next to dest_dir).
+    Returns {path, filename, size, format} or {skipped: reason}."""
+    flac_dir = flac_dir or dest_dir.parent / "flac"
+    try:
+        if safe_filename(meta["title"]) is None:   # cheapest check first, whatever the audio is
+            raise Skip("title has letters the player file name cannot hold")
+        facts = probe(master) if master.exists() else None
+        if master.suffix.lower() == ".m4a" and facts and facts["codec"] == "aac":
+            return _build_m4a(master, dest_dir, video_id, meta, cover, [flac_dir])
+        return _build_flac(master, flac_dir, video_id, meta, cover, [dest_dir])
+    except Skip as why:
+        return {"skipped": str(why)}

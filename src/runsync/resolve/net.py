@@ -12,6 +12,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from ..retry import run_with_retries
+from ..util import now_iso
 
 log = logging.getLogger("runsync.net")
 USER_AGENT = "runsync/0.1 (+https://github.com/mohitjain/runsync)"
@@ -61,6 +62,6 @@ class Http:
             return None
         self.misses += 1
         self.conn.execute("INSERT OR REPLACE INTO http_cache (key, body, fetched_at) VALUES (?, ?, ?)",
-                          (url, json.dumps(data), datetime.now(UTC).isoformat(timespec="seconds")))
+                          (url, json.dumps(data), now_iso()))
         self.conn.commit()
         return data

@@ -5,8 +5,8 @@ import json
 import re
 import sqlite3
 from collections import Counter
-from datetime import UTC, datetime
 
+from ..util import now_iso
 from .net import Http
 from .parse import key
 from .tiers import ITUNES_URL
@@ -47,7 +47,7 @@ def save_artist(conn: sqlite3.Connection, name: str, languages: list[str], confi
         "confidence=excluded.confidence, source=excluded.source, country=excluded.country, genre=excluded.genre, "
         "updated_at=excluded.updated_at",
         (name, key(name), json.dumps(languages), confidence, source, country, genre,
-         datetime.now(UTC).isoformat(timespec="seconds")))
+         now_iso()))
 
 
 def itunes_artist_genre(http: Http, artist: str) -> str | None:

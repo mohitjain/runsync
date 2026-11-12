@@ -99,12 +99,23 @@ def load_token(path: Path) -> dict | None:
         return None
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Google's API does not redirect. If anything ever does, stop: urllib would resend the Authorization header to the
+    new host, which the host allow-list never checked."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _post_form(url: str, data: dict) -> dict:
     body = urllib.parse.urlencode(data).encode()
     req = urllib.request.Request(url, data=body, method="POST",
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=30) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as exc:
         try:
@@ -188,7 +199,7 @@ def login(client_path: Path, token_path: Path, open_browser: Callable[[str], obj
 def _http(method: str, url: str, headers: dict, body: bytes | None) -> tuple[int, dict]:
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _OPENER.open(req, timeout=30) as r:
             raw = r.read()
             return r.status, (json.loads(raw) if raw else {})
     except urllib.error.HTTPError as exc:
@@ -363,6 +374,15 @@ def add_entry(api: Api, playlist_id: str, video_id: str, position: int | None = 
         # The playlist is sorted automatically (for example by date added), so it has no positions: add at the default place.
         sn.pop("position")
         return api.request("POST", "playlistItems", {"part": "snippet"}, {"snippet": sn})["id"]
+
+
+def ratings(api: Api, video_ids: list[str]) -> dict[str, str]:
+    """{video id: "like" | "none" | ...} for the signed-in owner (videos.getRating: a read, 1 unit per 50 videos)."""
+    out: dict[str, str] = {}
+    for i in range(0, len(video_ids), 50):
+        d = api.request("GET", "videos/getRating", {"id": ",".join(video_ids[i:i + 50])})
+        out.update({x["videoId"]: x.get("rating", "none") for x in d.get("items", [])})
+    return out
 
 
 def delete_entry(api: Api, item_id: str) -> None:

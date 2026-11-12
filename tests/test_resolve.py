@@ -86,8 +86,6 @@ def test_resolves_tags_and_builds_player_copy_without_touching_master(cfg, lib):
     assert hashlib.sha256(master.read_bytes()).hexdigest() == sha
     track = lib.execute("SELECT clean_filename, player_format FROM tracks WHERE video_id='a'").fetchone()
     assert (track["clean_filename"], track["player_format"]) == (copy.name, "m4a")
-    events = [r["event"] for r in lib.execute("SELECT event FROM track_events WHERE video_id='a'")]
-    assert "resolved" in events and "player_built" in events
 
 
 @needs_ffmpeg
@@ -114,7 +112,6 @@ def test_dry_run_writes_nothing(cfg, lib):
     res = run_resolve(cfg, lib, dry_run=True, http=FakeHttp(), rep=rep)
     assert res.resolved == 1 and rep.resolved_
     assert lib.execute("SELECT COUNT(*) FROM metadata").fetchone()[0] == 0
-    assert lib.execute("SELECT COUNT(*) FROM metadata_candidates").fetchone()[0] == 0
     assert not cfg.review_path.exists() and not cfg.player.exists()
 
 
@@ -215,15 +212,6 @@ def test_review_csv_fixes_become_overrides_and_are_applied_next_run(cfg, lib):
     assert (m["artist"], m["language"], m["source_tier"], m["needs_review"]) == ("Real Singer", "punjabi",
                                                                                "override", 0)
     assert json.loads(m["artists_json"]) == ["Real Singer"]
-
-
-def test_candidates_from_every_tier_are_kept_for_audit(cfg, lib):
-    add_track(lib, "a", None, original_title="Metallica - One (Official Video)", channel="Label Records")
-    songs = [{"trackName": "One", "artistName": "Metallica", "collectionName": "...And Justice for All",
-              "releaseDate": "1988-08-25T07:00:00Z", "trackTimeMillis": 447000, "primaryGenreName": "Metal"}]
-    run_resolve(cfg, lib, http=FakeHttp(songs=songs), build=False)
-    tiers = {r["tier"] for r in lib.execute("SELECT tier FROM metadata_candidates WHERE video_id='a'")}
-    assert "parser" in tiers
 
 
 def test_locked_row_is_never_rewritten_even_if_its_tier_looks_weak(cfg, lib):

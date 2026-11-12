@@ -34,6 +34,13 @@ row per track after the summary rows; it is still one table with an icon column 
 header. Take the rows from the JSON `tracks` lists, in order. Show every track up to 40; beyond that show the first 40
 and ask with AskUserQuestion "Show the other N?" (`Show all` / `Skip`) instead of one huge message.
 
+## Keep the user informed
+
+Before any step that takes more than a few seconds (a download, tagging, the web search, a YouTube push) say **one line**
+first: what is starting and roughly how long ("⏳ Downloading 12 tracks: about 3 minutes"). A download takes about 10-15 seconds
+per track; for more than 20 tracks offer to run it in the background and watch it with `/loop 5m /runsync-status`.
+When a step needs the user (a cookie export, a YouTube login, a choice), say it as one short line with the exact next action.
+
 ## Step cards
 
 **After every step, before starting the next, show that step's card**: one small table (6 rows at most) saying what
@@ -68,7 +75,8 @@ Card:
 
 `uv run runsync playlists --json`. `source` is `api` when the user is signed in to YouTube (no cookies needed to read
 playlists) and `cookies` otherwise. If `live` is false neither worked (cookies rejected and no YouTube login): go back to the
-cookie step of **runsync-setup**, then return here. Ask with AskUserQuestion "Change which playlists sync?" with `Keep as is` and
+cookie step of **runsync-setup**, then return here. `gone` (playlists deleted on YouTube but still synced) must be dealt with first: ask with AskUserQuestion "rerunsync no longer
+exists on YouTube. Stop syncing it?" (`Stop` / `Keep`), then `uv run runsync playlists --stop "<title>"`. Then ask with AskUserQuestion "Change which playlists sync?" with `Keep as is` and
 `Change` (go straight to **runsync-playlists** when none is syncing). On `Change`, run **runsync-playlists**.
 
 Card (one row per fact; the ▲ ▼ rows only when something changed):
@@ -156,10 +164,15 @@ Card:
 
 Optional and quick. `uv run runsync youtube --json 2>/dev/null`: not signed in (or no client file): one ⬜ row "Not signed
 in to YouTube (optional)" and move on, never ask here. Signed in: `uv run runsync youtube --cleanup --json 2>/dev/null`;
-`cleanup.ops` > 0: run the **runsync-youtube** skill (preview, confirm, apply); 0: a ⬜ row "Playlists are clean".
+`cleanup.ops` > 0: run the **runsync-youtube** skill (preview, confirm, apply, check); 0: a ⬜ row "Playlists are clean".
+The plan covers repeats, duplicates, dead songs and chosen replacements; the database forgets each one after the check.
+If `cleanup.manual` is not empty, the skill lists those songs for the user to unlike by hand (Liked Music cannot be changed
+through the API) and asks "Done, check again" / "Later"; add a ⚠️ row "N to unlike by hand" to the YouTube card.
 
-If the Download step found unavailable songs with a title on record, offer once with AskUserQuestion "Search replacements
-for N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill.
+If `youtube --json` shows `picks.picked` > 0 (replacement choices saved earlier, not pushed yet) the cleanup plan already
+contains them. Otherwise, if the Download step found unavailable songs with a title on record, offer once with
+AskUserQuestion "Search replacements for N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill (its picks
+and every dead song then go through the same cleanup).
 
 Card: the detail table of the sub-skill (every song removed, swapped or added, from `applied.items`), then the live check
 from `applied.verify` ("Checked on YouTube: N of N changes confirmed", before → after counts per playlist). Never show a
@@ -171,7 +184,8 @@ from `applied.verify` ("Checked on YouTube: N of N changes confirmed", before �
 | 🔄 | Refresh · Suit Full Video Song | replaced by "Suit (Audio)" |
 | ✅ | Checked on YouTube | 21 of 21 changes confirmed |
 | ✅ | Refresh | 294 → 273 songs |
-| 🔎 | rerunsync | 9 replacements added |
+| 🔎 | Running · Sweet Emotion | replaced in place by "Aerosmith - Sweet Emotion" |
+| ⚰️ | Refresh · Paisa | dead, no replacement: removed |
 
 ## 8. Card
 

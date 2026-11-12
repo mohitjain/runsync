@@ -7,6 +7,7 @@ never gets offered a song they have. Nothing here writes anywhere.
 """
 from __future__ import annotations
 
+import difflib
 import re
 import sqlite3
 from collections.abc import Callable
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 import yt_dlp
 
 from .logs import YtdlpLogger
+from .util import now_iso
 
 PENALTY_WORDS = ("live", "cover", "karaoke", "reaction", "slowed", "reverb", "8d", "nightcore", "instrumental", "lyrics",
                  "tutorial", "lesson", "remix", "mashup", "speed up", "sped up")
@@ -32,10 +34,20 @@ def tokens(title: str) -> set[str]:
     return set(normalize(title).split())
 
 
+KEEP_PAREN = re.compile(r"\(([^)]*(?:remix|mix|live|remaster|version|acoustic|edit)[^)]*)\)", re.IGNORECASE)
+
+
 def query_for(title: str) -> str:
-    """The title without upload noise (\"official video clip (HD)\"), keeping the words that change the recording."""
+    """The title without upload noise ("official video clip (HD)"), keeping what changes the recording: a bracket that says
+    remix, live, remaster, version, acoustic or edit stays (with its year)."""
+    kept = [normalize(m) for m in KEEP_PAREN.findall(title or "")]
     q = normalize(title)
-    return " ".join([q] + [w for w in ("live", "remix", "remaster") if w in re.findall(r"[a-z]+", (title or "").lower()) and w not in q.split()])
+    extra = [w for w in ("live", "remix", "remaster") if w in re.findall(r"[a-z]+", (title or "").lower())]
+    words = q.split()
+    for k in kept:
+        words += [w for w in k.split() if w not in words]
+    words += [w for w in extra if w not in words]
+    return " ".join(words)
 
 
 @dataclass
@@ -79,6 +91,7 @@ class Lost:
     reason: str
     in_library: dict | None = None
     candidates: list[Candidate] = field(default_factory=list)
+    ids: list[str] = field(default_factory=list)   # every lost video id of this song (uploads of one title)
 
 
 def in_library(conn: sqlite3.Connection, title: str) -> dict | None:
@@ -94,25 +107,66 @@ def in_library(conn: sqlite3.Connection, title: str) -> dict | None:
     return None
 
 
-def lost_songs(conn: sqlite3.Connection) -> tuple[list[Lost], int]:
-    """(songs we still know the title of, how many unavailable tracks have no title at all). One entry per song."""
+def _lost_groups(conn: sqlite3.Connection) -> tuple[list[Lost], int]:
+    """Every song YouTube no longer serves that we still know a title for (titles a spelling apart are one song with
+    several lost ids), and how many unavailable tracks have no title at all."""
     rows = conn.execute("SELECT video_id, title, last_error FROM tracks WHERE status = 'unavailable' ORDER BY rowid").fetchall()
-    seen: set[str] = set()
-    out: list[Lost] = []
+    groups: list[Lost] = []
+    keys: list[str] = []
     nameless = 0
     for r in rows:
         if not (r["title"] or "").strip():
             nameless += 1
             continue
         key = normalize(r["title"])
-        if key in seen:
+        hit = next((i for i, k in enumerate(keys) if k == key or difflib.SequenceMatcher(None, k, key).ratio() >= 0.9), None)
+        if hit is not None:
+            groups[hit].ids.append(r["video_id"])
             continue
-        seen.add(key)
         err = r["last_error"] or ""
         reason = ("blocked by the rights holder" if "blocked" in err or "copyright" in err else
                   "private" if "private" in err else "removed" if "terminated" in err else "unavailable")
-        out.append(Lost(r["video_id"], r["title"], reason, in_library(conn, r["title"])))
-    return out, nameless
+        groups.append(Lost(r["video_id"], r["title"], reason, in_library(conn, r["title"]), ids=[r["video_id"]]))
+        keys.append(key)
+    return groups, nameless
+
+
+def lost_songs(conn: sqlite3.Connection) -> tuple[list[Lost], int]:
+    """(lost songs the owner has not decided about yet, unavailable tracks with no title)."""
+    decided = {r["lost_id"] for r in conn.execute("SELECT lost_id FROM replacement_picks")}
+    groups, nameless = _lost_groups(conn)
+    return [g for g in groups if not any(i in decided for i in g.ids)], nameless
+
+
+def lost_ids_of(conn: sqlite3.Connection, lost_id: str) -> list[str]:
+    """The lost video ids that are the same song as this one (so one answer covers them all)."""
+    for g in _lost_groups(conn)[0]:
+        if lost_id in g.ids:
+            return g.ids
+    return [lost_id]
+
+
+def record_pick(conn: sqlite3.Connection, lost_id: str, pick_id: str, title: str = "") -> list[str]:
+    ids = lost_ids_of(conn, lost_id)
+    for i in ids:
+        conn.execute("INSERT OR REPLACE INTO replacement_picks (lost_id, pick_id, title, status, decided_at) "
+                     "VALUES (?, ?, ?, 'picked', ?)", (i, pick_id, title, now_iso()))
+    conn.commit()
+    return ids
+
+
+def record_skip(conn: sqlite3.Connection, lost_id: str) -> list[str]:
+    ids = lost_ids_of(conn, lost_id)
+    for i in ids:
+        conn.execute("INSERT OR REPLACE INTO replacement_picks (lost_id, pick_id, title, status, decided_at) "
+                     "VALUES (?, NULL, NULL, 'skipped', ?)", (i, now_iso()))
+    conn.commit()
+    return ids
+
+
+def pick_counts(conn: sqlite3.Connection) -> dict:
+    return {r["status"]: r["n"] for r in conn.execute(
+        "SELECT status, COUNT(DISTINCT COALESCE(pick_id, lost_id)) AS n FROM replacement_picks GROUP BY status")}
 
 
 def video_titles(ids: list[str], lookup: Callable[[str], str] | None = None) -> dict[str, str]:

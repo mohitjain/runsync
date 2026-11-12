@@ -48,7 +48,7 @@ brew install python uv ffmpeg chromaprint deno      # minus anything already pre
 
 ```
 uv sync
-uv run runsync --help          # must list sync, resolve, playlists
+uv run runsync --help          # must list playlists, sync, resolve, dedupe, card, youtube
 ```
 
 ## 4. Cookies (the only manual step)
@@ -80,6 +80,18 @@ treat the cookies as bad even though this check said `ok`, and go back to step 1
 
 If the check says `missing`, `no_login` or `expired`, ask them to export again (step 1) and give the new path.
 If the user declines, runsync still works anonymously at reduced quality; say so and continue.
+
+## 4b. YouTube login (optional, recommended)
+
+Cookies rotate and break; the official YouTube API does not. Signed in, runsync reads your playlists through the API
+(cookies are then only needed to download audio) and can tidy your playlists. Ask with AskUserQuestion "Sign in to the
+YouTube API now?" (`Yes, set it up` / `Later`). `Later` is fine: everything still works with cookies.
+
+On yes: check `ls client_secret.json`. If it is missing, give the README steps ("YouTube login") in three short lines:
+Google Cloud project, YouTube Data API v3 enabled, consent screen with the user as test user, a **Desktop** OAuth client;
+save its JSON in the repo folder as `client_secret.json` (it is gitignored: never print it). Then tell the user to run
+`! uv run runsync youtube --login` (it opens a browser), and confirm with `uv run runsync youtube --json 2>/dev/null`
+(`logged_in` true). While the Google app is in testing mode the login can expire after 7 days: `--login` again.
 
 ## 5. Choose playlists
 
@@ -117,7 +129,8 @@ steps, in order, and let the user choose:
   | ✅ | Tools |
   | ✅ | Project installed |
   | ✅ | Cookies |
+  | ⬜ | YouTube login (optional) |
   | ⏸️ | Choose playlists |
 
   Icons: ✅ done, ❌ failed, ⚠️ needs attention, ⏸️ waiting. Rows: Homebrew, Tools, Project installed,
-  Cookies, Playlists. After the table, at most one line, and only if something is ❌ or ⚠️, saying what the user must do.
+  Cookies, YouTube login, Playlists. After the table, at most one line, and only if something is ❌ or ⚠️, saying what the user must do.

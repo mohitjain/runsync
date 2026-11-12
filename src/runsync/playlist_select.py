@@ -1,7 +1,47 @@
 """Choose playlists without a prompt: numbered list, then "sync 1,3" / "stop 2" by number or name."""
 from __future__ import annotations
 
+import logging
 import sqlite3
+from pathlib import Path
+from typing import NamedTuple
+
+from . import fetch
+from . import youtube as yt
+
+log = logging.getLogger("runsync.playlists")
+
+
+class Refresh(NamedTuple):
+    source: str            # "api" or "cookies"
+    gone: list[dict]       # playlists you sync that no longer exist in your account: [{id, title}]
+
+
+def refresh_account_playlists(conn: sqlite3.Connection, cookies: Path | None, api: yt.Api | None = None) -> Refresh:
+    """Upsert your account playlists from YouTube (the API when signed in, else cookies), keeping the saved selection.
+    Unselected ones that vanished are dropped; selected ones that vanished are reported (every sync would fail on them)."""
+    found, source = None, "cookies"
+    if api is not None:
+        try:
+            found, source = fetch.api_account_playlists(api), "api"
+        except yt.YouTubeError as exc:
+            log.warning("playlist list via API failed (%s); using cookies", exc)
+    if found is None:
+        if cookies is None:
+            raise RuntimeError("no YouTube login and no usable cookies")
+        found = fetch.fetch_account_playlists(cookies)
+    for p in found:
+        conn.execute("INSERT INTO playlists (id, title, url, kind) VALUES (?, ?, ?, 'account') "
+                     "ON CONFLICT(id) DO UPDATE SET title = excluded.title", (p.id, p.title, p.url))
+    ids = [p.id for p in found]
+    if ids:  # never prune on an empty result
+        marks = ",".join("?" * len(ids))
+        conn.execute(f"DELETE FROM playlists WHERE kind = 'account' AND selected = 0 AND id NOT IN ({marks})", ids)
+    gone = [{"id": r["id"], "title": r["title"]} for r in conn.execute(
+        f"SELECT id, title FROM playlists WHERE kind = 'account' AND selected = 1 AND id NOT IN ({','.join('?' * len(ids))})", ids)
+        ] if ids else []
+    conn.commit()
+    return Refresh(source, gone)
 
 
 def list_playlists(conn: sqlite3.Connection) -> list[dict]:

@@ -119,20 +119,20 @@ def test_filename_is_title_only_and_collisions_are_handled(tmp_path):
 
 def test_non_m4a_and_unholdable_names_are_skipped_with_a_reason(tmp_path):
     (tmp_path / "x.webm").write_bytes(b"x")
-    assert "Phase 4" in build_player_copy(tmp_path / "x.webm", tmp_path / "p", "v", {"artist": "A", "title": "T"},
-                                          None)["skipped"]
+    assert "FLAC" in build_player_copy(tmp_path / "x.webm", tmp_path / "p", "v", {"artist": "A", "title": "T"},
+                                       None)["skipped"]          # not audio at all: it cannot be converted either
     (tmp_path / "y.m4a").write_bytes(b"x")
     assert "cannot hold" in build_player_copy(tmp_path / "y.m4a", tmp_path / "p", "v",
                                                {"artist": "A", "title": "Привет"}, None)["skipped"]
 
 
 @needs_ffmpeg
-def test_m4a_that_does_not_hold_aac_is_not_copied(tmp_path):
+def test_m4a_that_does_not_hold_aac_is_converted_to_flac_not_copied(tmp_path):
     ac3 = tmp_path / "x.m4a"
     subprocess.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=duration=1",
                     "-c:a", "ac3", str(ac3)], check=True)
     out = build_player_copy(ac3, tmp_path / "p", "v1", {"artist": "A", "title": "T"}, None)
-    assert "ac3" in out["skipped"] and "Phase 4" in out["skipped"]
+    assert out["format"] == "flac" and out["path"].parent == tmp_path / "flac"      # converted, never copied as m4a
     assert not list((tmp_path / "p").glob("*.m4a"))
 
 

@@ -16,15 +16,19 @@ source of truth, the Mac library is the cache, the card is a disposable mirror. 
 | Language | Hindi, English, Punjabi only. Your override, then the upload's words, then the lead artist's label. |
 | Dedupe | Same recording found by audio fingerprint; never merges live, remix or cover with the original. Asks about doubtful pairs. Deletes for good only with `--confirm <plan id>`; keeps an alias so `--undo` works. |
 | Card | Identified by volume UUID, never the Mac's own disk. Only files in the card's manifest are ever deleted; copy to a temp name, fsync, verify; 20% removal guard; one M3U8 per playlist; undo of the last sync. |
-| YouTube API | Official Data API v3 over OAuth (Desktop client, PKCE; token owner-only, gitignored). Reads playlists (cookies are the fallback and still serve audio and Liked Music), removes repeats and merged duplicates from your playlists, adds songs, puts replacements for lost songs in a private `rerunsync` playlist. Daily quota 10,000 units; budget 8,000 (`youtube_budget`). |
+| YouTube API | Official Data API v3 over OAuth (Desktop client, PKCE; token owner-only, gitignored). Reads playlists (cookies are the fallback and still serve audio and Liked Music), removes repeats, merged duplicates, dead songs and songs you named from your playlists (and lists what is still liked for you to unlike by hand), puts chosen replacements in place of the dead entries, adds songs. Your replacement picks are saved in `state.db` until the push puts them in place of the dead entries, then forgotten. Daily quota 10,000 units; budget 8,000 (`youtube_budget`). |
+| Database | A snapshot of YouTube from the last sync plus the changes still to push. After a verified push, dead rows (unavailable, merged, trashed, aliases, picks, logs) are deleted; no history. Unavailable with no replacement means delete. |
 | Safety | Failure is never removal: a failed or empty fetch deletes nothing. Removed tracks go to `.trash/` for 14 days. Mass-delete guard (>20%). Every destructive or outward write: preview, then `--confirm <plan id>` of that exact plan, journal, undo. |
 | Stack | Python 3.11, uv, yt-dlp (+ deno and yt-dlp-ejs), ffmpeg, chromaprint, mutagen, SQLite, typer + rich, pytest, ruff. |
 
 ## Library (`~/Music/RunSync`, or `RUNSYNC_HOME`)
 
 `master/` best audio per video · `player/m4a/` and `player/flac/` device copies · `.trash/` · `state.db` · `enrich.csv`,
-`review.csv` · `cache/covers/` · `config.yaml` (optional overrides) · `logs/`. Modules: fetch · download · resolve ·
-dedupe · player · card · youtube/ytclean/ytsearch · sync · cli.
+`review.csv` · `cache/covers/` · `config.yaml` (optional overrides) · `logs/`.
+
+Modules: `fetch` (read playlists) · `download` · `resolve/` (metadata) · `dedupe` · `player` · `card` · `sync` (the pipeline) ·
+`youtube` (API client) · `ytclean` (plan, push, verify, undo) · `ytsearch` (lost songs, picks) · `ytflow` (what `runsync
+youtube` does) · `snapshot` (keeps the database a snapshot) · `status` · `cli` (options and a few plain lines).
 
 ## Learned
 

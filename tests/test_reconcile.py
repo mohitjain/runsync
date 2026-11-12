@@ -29,7 +29,6 @@ def test_missing_file_requeued(env):
     out = reconcile(cfg, conn, apply=True)
     assert out["missing"] == 1
     assert conn.execute("SELECT status, master_path FROM tracks").fetchone()[:] == ("pending", None)
-    assert conn.execute("SELECT event FROM track_events").fetchone()[0] == "file_missing"
 
 
 def test_dry_run_changes_nothing(env):
