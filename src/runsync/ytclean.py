@@ -14,7 +14,7 @@ import hashlib
 import math
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 
 from . import youtube as yt
@@ -123,6 +123,48 @@ def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = No
     return plan
 
 
+class NoSuchPlaylist(Exception):
+    pass
+
+
+def find_playlist(api: yt.Api, name_or_id: str) -> tuple[str, str] | None:
+    """One of your own playlists by id, exact name or a name part that matches exactly one. None when there is none."""
+    mine = yt.my_playlists(api)
+    want = name_or_id.strip().casefold()
+    hit = [p for p in mine if p["id"] == name_or_id.strip()] or [p for p in mine if p["title"].casefold() == want] \
+        or [p for p in mine if want and want in p["title"].casefold()]
+    if len(hit) > 1:
+        raise NoSuchPlaylist(f"'{name_or_id}' matches {len(hit)} playlists: {', '.join(p['title'] for p in hit)}")
+    return (hit[0]["id"], hit[0]["title"]) if hit else None
+
+
+def build_add_plan(api: yt.Api, conn: sqlite3.Connection, video_ids: list[str], playlist: str, create: bool = False,
+                   titles: dict[str, str] | None = None) -> tuple[Plan, list[dict]]:
+    """Add songs to one of your playlists (made first when it does not exist and `create` is set).
+    Returns the plan and the ids skipped because the playlist already has them. Writes nothing."""
+    titles = titles or {}
+    found = find_playlist(api, playlist)
+    plan, skipped = Plan(), []
+    if found is None:
+        if not create:
+            raise NoSuchPlaylist(f"No playlist called '{playlist}'. Say to create it, or pick one of: "
+                                 + ", ".join(p["title"] for p in yt.my_playlists(api)))
+        pid, title, have = f"new:{playlist.strip()}", playlist.strip(), set()
+        plan.ops.append(Op("create", pid, "", "", 0, "create", title))
+    else:
+        pid, title = found
+        if pid in NEVER_WRITE:
+            raise NoSuchPlaylist(f"'{title}' cannot be changed from here.")
+        have = {e.video_id for e in yt.playlist_entries(api, pid)}
+    plan.playlists[pid] = title
+    for v in dict.fromkeys(video_ids):
+        if v in have:
+            skipped.append({"video_id": v, "why": "already in the playlist"})
+        else:
+            plan.ops.append(Op("add", pid, v, "", 0, "add", titles.get(v, ""), v))
+    return plan, skipped
+
+
 def summary(plan: Plan) -> dict:
     per = {}
     for pid, title in plan.playlists.items():
@@ -145,6 +187,7 @@ class Applied:
     done: int = 0
     deleted: int = 0
     added: int = 0
+    created: int = 0
     left: int = 0
     stopped: str = ""        # why it stopped early ("" = finished the batch)
 
@@ -169,12 +212,24 @@ def apply_plan(api: yt.Api, conn: sqlite3.Connection, plan: Plan, confirm: str, 
     todo = plan.ops[:max(0, batch)]
     status = "done"
     try:
+        made: dict[str, str] = {}
         for o in todo:
             if not api.can_spend(WRITE_COST):
                 out.stopped = f"daily quota budget reached ({api.budget} units); the rest waits for tomorrow"
                 break
-            if o.kind == "add":
-                new_id = yt.add_entry(api, o.playlist_id, o.video_id, position=o.position)
+            if o.playlist_id in made:
+                o = replace(o, playlist_id=made[o.playlist_id])
+            if o.kind == "create":
+                real = yt.create_playlist(api, o.title)
+                made[o.playlist_id] = real
+                _journal(conn, run_id, "create", replace(o, playlist_id=real), "")
+                conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES (?, ?, ?, 'account', 1) "
+                             "ON CONFLICT(id) DO UPDATE SET selected = 1",
+                             (real, o.title, f"https://www.youtube.com/playlist?list={real}"))
+                conn.commit()
+                out.created += 1
+            elif o.kind == "add":
+                new_id = yt.add_entry(api, o.playlist_id, o.video_id, position=o.position or None)
                 _journal(conn, run_id, "add", o, new_id)
                 out.added += 1
             else:
@@ -219,6 +274,10 @@ def undo_last_run(api: yt.Api, conn: sqlite3.Connection) -> Undone:
             if not api.can_spend(WRITE_COST):
                 out.stopped = f"daily quota budget reached ({api.budget} units); run the undo again tomorrow"
                 break
+            if r["op"] == "create":                           # the playlist stays (empty and private); only the note goes
+                conn.execute("DELETE FROM youtube_journal WHERE id = ?", (r["id"],))
+                conn.commit()
+                continue
             if r["op"] == "delete":
                 try:
                     yt.add_entry(api, r["playlist_id"], r["video_id"], position=r["position"])

@@ -21,7 +21,7 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import db, fetch, ytclean
+from . import db, fetch, ytclean, ytsearch
 from . import youtube as yt
 from .card import (
     apply_card_plan,
@@ -825,7 +825,13 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
             confirm: str = typer.Option("", "--confirm", help="With --apply: the plan id shown by the preview. Only that "
                                         "exact plan runs; any other is refused."),
             batch: int = typer.Option(ytclean.DEFAULT_BATCH, "--batch", help="With --apply: most operations per run."),
-            undo: bool = typer.Option(False, "--undo", help="Reverse the last cleanup run."),
+            undo: bool = typer.Option(False, "--undo", help="Reverse the last cleanup or add run."),
+            search: str = typer.Option("", "--search", help="Search YouTube for a song (no quota); lists candidates."),
+            replacements: bool = typer.Option(False, "--replacements", help="Search a replacement for each song YouTube "
+                                              "no longer serves (no quota; nothing changes)."),
+            add: str = typer.Option("", "--add", help="Video ids to add (comma separated); needs --to."),
+            to: str = typer.Option("", "--to", help="With --add: your playlist's name or id."),
+            create: bool = typer.Option(False, "--create", help="With --add: make the playlist (private) if it is missing."),
             json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
     """Show the YouTube API login, today's quota and your playlists. --login signs in; --cleanup previews the cleanup."""
     console.stderr = json_out
@@ -851,11 +857,37 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                      announce=lambda m: console.print(f"\U0001f310 {_esc(m)}"))
             facts["logged_in"] = True
             console.print("\u2705 Signed in. The login is saved in youtube_token.json (owner-only, git-ignored).")
-        if (cleanup or apply or undo) and not facts["logged_in"]:
+        if search:
+            facts["search"] = {"query": search, "candidates": [ytsearch.as_dict(c) for c in ytsearch.candidates(search)]}
+        if replacements:
+            lost, nameless = ytsearch.lost_songs(conn)
+            for song in lost:
+                if song.in_library is None:
+                    song.candidates = ytsearch.candidates(ytsearch.query_for(song.title))
+            facts["replacements"] = {"no_title": nameless, "songs": [
+                {"video_id": s_.video_id, "title": s_.title, "reason": s_.reason, "in_library": s_.in_library,
+                 "candidates": [ytsearch.as_dict(c) for c in s_.candidates]} for s_ in lost]}
+        if (cleanup or apply or undo or add) and not facts["logged_in"]:
             raise yt.AuthError(f"Not signed in to YouTube. {yt.LOGIN_HINT}")
-        if apply and not cleanup:
+        if add and not to:
+            raise ytclean.PlanRefused("--add needs --to <playlist name or id>.")
+        if apply and not (cleanup or add):
             cleanup = True
-        if cleanup or undo:
+        if add:
+            ids = [v.strip() for v in add.split(",") if v.strip()]
+            with run_lock(cfg.library) if apply else nullcontext():
+                aplan, skipped = ytclean.build_add_plan(api, conn, ids, to, create, ytsearch.video_titles(ids))
+                facts["add"] = {"plan_id": ytclean.plan_id(aplan), "playlist": next(iter(aplan.playlists.values())),
+                                "creates": any(o.kind == "create" for o in aplan.ops), "cost": aplan.cost,
+                                "videos": [{"video_id": o.video_id, "title": o.title} for o in aplan.ops if o.kind == "add"],
+                                "skipped": skipped}
+                if apply:
+                    r = ytclean.apply_plan(api, conn, aplan, confirm, batch)
+                    facts["applied"] = {"added": r.added, "created": r.created, "left": r.left, "stopped": r.stopped}
+                    console.print(f"\u2705 Added {r.added} song(s)" + (", playlist created" if r.created else "")
+                                  + (f" ({_esc(r.stopped)})" if r.stopped else "."))
+            facts["units_today"] = api.units_today()
+        elif cleanup or undo:
             with run_lock(cfg.library) if (apply or undo) else nullcontext():
                 if undo:
                     r = ytclean.undo_last_run(api, conn)
@@ -880,12 +912,25 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
             facts["units_today"] = api.units_today()
     except AlreadyRunning as exc:
         fail(str(exc), 3)
-    except ytclean.PlanRefused as exc:
+    except (ytclean.PlanRefused, ytclean.NoSuchPlaylist) as exc:
         fail(str(exc))
     except yt.YouTubeError as exc:
         fail(str(exc))
     if json_out:
         sys.stdout.write(json.dumps(facts) + "\n")
+        return
+    if "add" in facts and "applied" not in facts:
+        a = facts["add"]
+        console.print(f"\u2795 Add plan {a['plan_id']}: {len(a['videos'])} song(s) to {_esc(a['playlist'])}"
+                      f"{' (new)' if a['creates'] else ''}. Apply with: runsync youtube --add ... --to ... --apply --confirm {a['plan_id']}")
+        return
+    if "search" in facts or "replacements" in facts:
+        for c in facts.get("search", {}).get("candidates", []):
+            console.print(f"  {c['video_id']}  {_esc(c['title'])} \u00b7 {_esc(c['channel'])}")
+        for song in facts.get("replacements", {}).get("songs", []):
+            console.print(f"\U0001f3b5 {_esc(song['title'])}" + (" (already in your library)" if song["in_library"] else ""))
+            for c in song["candidates"][:3]:
+                console.print(f"    {c['video_id']}  {_esc(c['title'])} \u00b7 {_esc(c['channel'])}")
         return
     if "cleanup" in facts and "applied" not in facts and "undone" not in facts:
         c = facts["cleanup"]
