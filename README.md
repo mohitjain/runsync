@@ -11,7 +11,7 @@ See [PLAN.md](PLAN.md) for the build plan and locked decisions, [phase0-findings
 | 0 | Pre-work (tooling, Premium format check, card test) | Tooling and Premium check done; card test pending ([findings](phase0-findings.md)) |
 | 1 | Playlist discovery, fetch, diff, download to `master/` | Done; checkpoint passed on the real playlists (edge-case batch still to fix) |
 | 2a | Metadata, language, covers, tagged player copies, web-search enrichment via a Claude Code skill (no API key) | Built; awaiting the review checkpoint |
-| 3 | Dedupe | Not started |
+| 3 | Dedupe | Done; run on the real library (96 duplicates removed) |
 | 4 | Player build and safe sync to the card | Not started |
 | 5 | Status, doctor, launchd automation, full import | Not started |
 
@@ -57,8 +57,10 @@ The interface is Claude Code skills. Open Claude Code in this repo and say what 
 | "set up runsync" | `runsync-setup` | installs the tools, takes your cookie file, checks it |
 | "choose playlists" | `runsync-playlists` | lists them (✅ syncing), asks which to start or stop |
 | "enrich my library" | `runsync-enrich` | web-searches what the code could not settle |
+| "status" / "how is it going" | `runsync-status` | progress at a glance; schedule it with `/loop 5m /runsync-status` during a long download |
+| "remove duplicates" | `runsync-dedupe` | finds the same song uploaded twice, asks about doubtful pairs, deletes the extra |
 
-The skills drive four commands, which you can also run yourself:
+The skills drive six commands (most take `--json`, which they use to present results), which you can also run yourself:
 
 ```
 uv run runsync playlists                       # numbered list: ✅ syncing, ⬜ not
@@ -70,6 +72,9 @@ uv run runsync sync -n 5                       # download at most 5 tracks (defa
 uv run runsync resolve --dry-run               # preview the clean artist/title for each track
 uv run runsync resolve                         # tags, covers, ReplayGain, player copies
 uv run runsync resolve --redo                  # re-resolve every track (your corrections still win)
+uv run runsync status                          # progress bar, rate and time left
+uv run runsync dedupe                          # show duplicates (nothing changes)
+uv run runsync dedupe --apply --confirm ID     # delete exactly the previewed plan for good (the preview prints ID); --undo ID brings one back
 ```
 
 `resolve` turns upload titles like `Humari Adhuri Kahani - Full Song | Arijit Singh | ...` into clean tags. It tries, in order: YouTube's own music fields, the title parser, MusicBrainz, iTunes (India store). It stops at the first confident answer and never lets a lower-trust result replace a higher one. Tracks it is not sure about go to `review.csv` in the library: fill the `fix_*` columns and run `resolve` again; fixes are stored in `state.db` and always win. What the code cannot settle (no artist, unknown language) is also written to `enrich.csv`, which the `runsync-enrich` skill fills from a web search; `resolve` applies only answers with a source link and confidence of at least 0.85. Languages are Hindi, English or Punjabi only, and a track inherits its artist's. `master/` is never touched: tagged copies with a 500x500 cover and ReplayGain go to `player/m4a/` (Opus/other formats wait for Phase 4).
@@ -81,6 +86,7 @@ uv run runsync resolve --redo                  # re-resolve every track (your co
 3. `resolve`: clean artist/title/album/year/language, cover and ReplayGain; build `player/m4a/<Title>.m4a`.
 4. Fix what is left: `review.csv` by hand, or the `runsync-enrich` skill.
 5. `resolve` again: applies the fixes and rebuilds only the tracks that changed.
+6. `dedupe`: same recording uploaded twice (compared by audio fingerprint, so a music video with an intro still matches) keeps the best source and deletes the other for good. A live, remix or cover version is never merged with the studio one. Pairs in the doubtful band are asked about and the answer is remembered.
 
 Rules of the player copies: only real AAC audio is copied (Opus, AC-3 and other masters wait for Phase 4); a title with letters that cannot go in a file name is held for review; the same song from two videos is copied once and the other is held for Phase 3 (dedupe); a second song with the same title is named `Title (Artist)`. Language comes from your override, then what the upload says (script or words like "Punjabi"), then the lead artist; if nothing says, it stays blank.
 

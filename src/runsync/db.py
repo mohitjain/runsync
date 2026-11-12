@@ -18,7 +18,7 @@ MIGRATIONS = [
     CREATE TABLE tracks (
         video_id TEXT PRIMARY KEY,
         title TEXT,
-        status TEXT NOT NULL DEFAULT 'pending', -- pending | downloaded | unavailable | trashed
+        status TEXT NOT NULL DEFAULT 'pending', -- pending | downloaded | unavailable | trashed | merged
         itag TEXT, codec TEXT, bitrate REAL,
         master_path TEXT,
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -166,6 +166,28 @@ MIGRATIONS = [
         confidence REAL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (kind, key)
+    );
+    """,
+    # --- v4: dedupe --------------------------------------------------------
+    """
+    CREATE TABLE aliases (            -- a removed duplicate and the track that replaced it
+        video_id TEXT PRIMARY KEY,
+        winner_id TEXT NOT NULL,
+        similarity REAL,
+        reason TEXT,
+        merged_at TEXT NOT NULL
+    );
+    CREATE TABLE dedupe_decisions (   -- the owner's answer to "same song?" (a < b)
+        a TEXT NOT NULL,
+        b TEXT NOT NULL,
+        same INTEGER NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (a, b)
+    );
+    CREATE TABLE fingerprints (       -- chromaprint of a master, keyed by its sha256 so an edited file is redone
+        video_id TEXT PRIMARY KEY,
+        sha256 TEXT NOT NULL,
+        ints TEXT NOT NULL
     );
     """,
 ]

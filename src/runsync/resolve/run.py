@@ -52,6 +52,15 @@ class ResolveResult:
     enrich_open: int = 0         # rows still waiting for a search
     unlabelled: dict[str, int] = field(default_factory=dict)   # artists with no language yet, and their track counts
 
+    def to_dict(self) -> dict:
+        """Facts for the skills to present (see `runsync resolve --json`)."""
+        return {"considered": self.considered, "resolved": self.resolved, "review": self.review,
+                "by_tier": dict(self.by_tier), "kept": self.kept, "built": self.built, "held": self.held,
+                "build_skipped": self.build_skipped, "covers": self.covers, "unlabelled": dict(self.unlabelled),
+                "imported_fixes": self.imported_fixes, "enrich_applied": self.enrich_applied,
+                "enrich_open": self.enrich_open, "lookups_fetched": self.lookups_fetched,
+                "lookups_cached": self.lookups_cached, "lookups_failed": self.lookups_failed}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="microseconds")   # resolve vs build order must be exact
