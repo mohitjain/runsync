@@ -4,6 +4,7 @@
 
 ### Phase 2a: metadata, language, covers
 - `runsync resolve`: tiers YouTube fields, title parser, MusicBrainz, iTunes; confidence, trust order and a review queue (`review.csv`).
+- Phase 4: FLAC player copies for Opus and AC-3 masters (`player/flac/`); `runsync card` + the `runsync-sync-card` skill write the selected playlists to a registered microSD card: identified by volume UUID (never the Mac's own disk), only manifest files are ever deleted, foreign files are never overwritten, temp-file + fsync + verify writes, resume after a pulled card, 20% removal guard, free-space check, one M3U8 per playlist, undo of the last sync, and `--apply` needs `--confirm <plan id>`.
 - `sync --json` and `resolve --json` (facts on stdout, normal output on stderr); the skills present them: every report is one icon table, the `runsync` orchestrator shows a card after each step, and `runsync-enrich` reports answers with source links.
 - `runsync status` + `runsync-status` skill: progress bar, rate and time left; schedulable with `/loop 5m /runsync-status`.
 - `runsync dedupe` + `runsync-dedupe` skill (Phase 3): audio-fingerprint duplicate detection, best-source winner, permanent removal with `--apply`, aliases, `--undo`, mass-delete guard, and `--apply` only runs with `--confirm <plan id>` of the exact plan that was previewed.

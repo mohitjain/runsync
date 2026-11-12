@@ -21,7 +21,7 @@ from runsync.card import (
 
 
 class World:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, register=True):
         self.lib = tmp_path / "lib"
         self.lib.mkdir()
         self.mount = tmp_path / "card"
@@ -30,7 +30,7 @@ class World:
         self.player = self.lib / "player" / "m4a"
         self.player.mkdir(parents=True)
         self.vol = VolumeInfo(self.mount, "RUNCARD", "UUID-CARD", "exFAT", 10**9, dev=-1)   # not the library's disk
-        self.dev = register_device(self.conn, self.vol, "shanling", self.lib)
+        self.dev = register_device(self.conn, self.vol, "shanling", self.lib) if register else None
         self.n = 0
 
     def playlist(self, pid, title, selected=1):
@@ -72,6 +72,10 @@ def test_volume_plist_parsing():
     v = parse_volume_plist(data, Path("/Volumes/SD"), 123, 7)
     assert (v.uuid, v.name, v.fs, v.free_bytes, v.dev) == ("ABC-1", "SD", "ExFAT", 123, 7)
     assert parse_volume_plist({"VolumeName": "x"}, Path("/x"), 1, 1) is None      # no UUID: cannot be identified
+    fixed = parse_volume_plist({"VolumeUUID": "U", "Internal": True, "RemovableMedia": False}, Path("/Volumes/Recovery"), 1, 1)
+    assert fixed.internal and not fixed.removable                                  # a fixed disk is never offered as a card
+    sd = parse_volume_plist({"VolumeUUID": "U", "Internal": True, "RemovableMedia": True}, Path("/Volumes/SD"), 1, 1)
+    assert sd.removable                                                            # a card in the Mac's own SD slot
 
 
 def test_the_macs_own_disk_and_a_second_registration_are_refused(w, tmp_path):
@@ -291,3 +295,13 @@ def test_a_leftover_temp_file_of_a_track_that_is_no_longer_wanted_is_cleaned_up_
     (folder / f"Ghost.m4a{card.TMP_SUFFIX}").write_bytes(b"left by a pulled card")
     w.apply()
     assert not any(n.endswith(card.TMP_SUFFIX) for n in w.on_card())
+
+
+def test_internal_fixed_volumes_are_not_offered_as_cards(tmp_path, monkeypatch):
+    vols = tmp_path / "Volumes"
+    for n in ("Recovery", "SDCARD"):
+        (vols / n).mkdir(parents=True)
+    info = {"Recovery": VolumeInfo(vols / "Recovery", "Recovery", "U1", "APFS", 1, dev=-5, internal=True, removable=False),
+            "SDCARD": VolumeInfo(vols / "SDCARD", "SDCARD", "U2", "exFAT", 1, dev=-6, internal=True, removable=True)}
+    monkeypatch.setattr(card, "volume_info", lambda p: info[p.name])
+    assert [v.name for v in card.candidate_volumes(tmp_path, vols)] == ["SDCARD"]

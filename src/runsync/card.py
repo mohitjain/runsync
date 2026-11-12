@@ -52,6 +52,8 @@ class VolumeInfo:
     fs: str
     free_bytes: int
     dev: int          # st_dev of the mount: tells whether it is the same disk as the library
+    internal: bool = False    # a fixed disk inside the Mac (Recovery, Preboot ...), not something you pull out
+    removable: bool = True
 
 
 def parse_volume_plist(data: dict, mount: Path, free_bytes: int, dev: int) -> VolumeInfo | None:
@@ -60,7 +62,8 @@ def parse_volume_plist(data: dict, mount: Path, free_bytes: int, dev: int) -> Vo
     if not uuid:
         return None
     return VolumeInfo(Path(mount), data.get("VolumeName") or Path(mount).name, str(uuid),
-                      data.get("FilesystemName") or data.get("FilesystemType") or "?", free_bytes, dev)
+                      data.get("FilesystemName") or data.get("FilesystemType") or "?", free_bytes, dev,
+                      bool(data.get("Internal", False)), bool(data.get("RemovableMedia", data.get("Removable", True))))
 
 
 def volume_info(mount: Path) -> VolumeInfo | None:
@@ -86,7 +89,7 @@ def candidate_volumes(library: Path, volumes_dir: Path = Path("/Volumes")) -> li
         if p.is_symlink() or not p.is_dir():   # the boot volume is a symlink to /
             continue
         info = volume_info(p)
-        if info and info.dev != own:
+        if info and info.dev != own and not (info.internal and not info.removable):
             out.append(info)
     return out
 

@@ -31,4 +31,4 @@ python 3.11, uv 0.13.7, ffmpeg/ffprobe, chromaprint (`fpcalc`), deno 2.9.8, yt-d
 - [ ] M3U8 behaviour over 100 entries.
 - [ ] Buy 256 GB microSD + USB-C reader.
 
-These gate **Phase 4 (sync)**, not Phase 1.
+Phase 4's card engine is built and tested with a temporary folder as the card; these still gate its **first real sync** (the `diskutil` parsing and the M3U8/cover behaviour can only be confirmed on the real card). Defaults to revisit after the card test: playlist files sit next to the audio in the `Music` folder with relative names.
