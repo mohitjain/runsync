@@ -7,17 +7,23 @@ description: Choose which YouTube playlists runsync syncs - show every playlist 
 
 Keep this short and visual. The user answers with numbers or names; you do the rest.
 
-## 1. Show the list
+## 1. Show the list (you design it)
 
 ```
-uv run runsync playlists
+uv run runsync playlists --json
 ```
 
-It refreshes from YouTube and prints a numbered table: ✅ syncing, ⬜ not syncing. Show that table to the user as it is.
+It returns `{"live": bool, "problem": str, "playlists": [{n, title, synced, tracks}]}`. Do not paste it. Present a
+markdown table, ✅ for syncing and ⬜ for not, tracks right-aligned, "-" when unknown:
 
-If the output starts with "⚠️ Could not refresh from YouTube", the list is the saved one, not live, and the cookies need
-re-exporting (the command prints the steps). Say so in one line; continue with the saved list only if the user
-agrees.
+| # | | Playlist | Tracks |
+|--:|:-:|---|--:|
+| 1 | ✅ | Liked Music | 373 |
+| 2 | ⬜ | Liked videos | - |
+
+Headline above it: "**Your playlists** · 3 of 5 syncing". If `live` is false, put "⚠️ Not refreshed: the cookies
+were rejected, so this is the saved list" above the table, send the user to the cookie steps of `runsync-setup`, and
+continue only if they agree.
 
 ## 2. Ask with the AskUserQuestion tool (never as plain text)
 
@@ -40,7 +46,7 @@ A playlist that is not in the account can be added by URL: `uv run runsync add-p
 ## 3. Apply
 
 ```
-uv run runsync playlists --sync "<start answer>" --stop "<stop answer>"
+uv run runsync playlists --sync "<start answer>" --stop "<stop answer>" --json
 ```
 
 Join the chosen playlist names with commas (names or numbers both work). Leave an option out when its answer is
@@ -50,11 +56,16 @@ must match what the user saw); the command already skips the refresh when `--syn
 If it prints a red error (unknown number, unknown or ambiguous name, a playlist in both lists), nothing was changed:
 show the message and ask again.
 
-## 4. Confirm
+## 4. Confirm (you design it)
 
-Show the table the command prints (the new ✅/⬜ state). If it prints a ⚠️ line about tracks that will move to
-`.trash`, repeat that line once and say it only happens at the next `sync` (kept 14 days), and that
-`uv run runsync sync --dry-run` previews it. Then offer: `uv run runsync sync --dry-run`.
+The JSON has `started`, `stopped`, `leaving` and the new `playlists`. Present the new table (same design as step 1)
+under "**Done** · 2 syncing now", then at most one line each:
+
+- "▲ Started: Gym Mix" and "▼ Stopped: Running", only the ones that apply.
+- If `leaving` > 0: "⚠️ N downloaded tracks are only in a playlist you stopped. The next sync moves them to
+  `.trash` (kept 14 days)." Nothing else about it.
+
+Then offer `uv run runsync sync --dry-run`.
 
 ## Rules
 

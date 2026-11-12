@@ -298,3 +298,19 @@ def test_search_answer_is_applied_on_the_next_run_and_labels_other_tracks(cfg, l
     assert res.enrich_applied == 1 and res.considered == 2
     assert meta(lib, "a")["language"] == "punjabi" and meta(lib, "b")["language"] == "punjabi"
     assert res.enrich_open == 0 and not cfg.enrich_path.exists()
+
+
+def test_result_dict_and_cli_json_for_the_skills(cfg, lib, monkeypatch):
+    import json as jsonlib
+
+    from typer.testing import CliRunner
+
+    from runsync.cli import app
+    add_track(lib, "a", None, **YT)
+    run_resolve(cfg, lib, http=FakeHttp(genre="Rock"), build=False)
+    d = run_mod.ResolveResult(resolved=3, review=1, by_tier={"youtube": 2}).to_dict()
+    assert (d["resolved"], d["review"], d["by_tier"]) == (3, 1, {"youtube": 2}) and "enrich_open" in d
+    monkeypatch.setenv("RUNSYNC_HOME", str(cfg.library))
+    out = CliRunner().invoke(app, ["resolve", "--offline", "--no-build", "--json"])
+    last = [ln for ln in out.output.splitlines() if ln.startswith("{")][-1]
+    assert jsonlib.loads(last)["dry_run"] is False

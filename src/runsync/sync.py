@@ -54,6 +54,20 @@ class RunResult:
     aborted: str | None = None
     anonymous: bool = False
     updated_ytdlp: bool = False
+    queue_total: int = 0                 # dry run: how many tracks are waiting
+    bytes_downloaded: int = 0
+    seconds_downloading: float = 0.0
+    high_quality: int = 0                # >= 200 kbps (the Premium ~258 kbps tier)
+    standard_quality: int = 0            # below that (~129 kbps uploads)
+    opus: int = 0                        # masters that are not AAC (no player copy until Phase 4)
+
+    def to_dict(self) -> dict:
+        """Facts for the skills to present (see `runsync sync --json`)."""
+        return {"added": len(self.added), "removed": len(self.removed), "unavailable": len(self.unavailable),
+                "failed": [{"id": v, "reason": r} for v, r in self.failed], "aborted": self.aborted,
+                "anonymous": self.anonymous, "queue_total": self.queue_total,
+                "bytes": self.bytes_downloaded, "seconds": round(self.seconds_downloading),
+                "high_quality": self.high_quality, "standard_quality": self.standard_quality, "opus": self.opus}
 
     def summary(self) -> str:
         s = (f"+{len(self.added)} added, -{len(self.removed)} removed, {len(self.failed)} failed, "
@@ -247,6 +261,7 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
         queue = [(r["video_id"], r["title"] or r["video_id"]) for r in pend_rows]
         queue += [(v, titles.get(v) or v) for v in ordered if v in diff.new]
         this_run = min(len(queue), cfg.max_downloads_per_run)
+        res.queue_total = len(queue)
         res.added = [v for v, _ in queue[:this_run]]
         log(f"dry-run: queue {len(queue)} ({len(diff.new)} new), this run would take {this_run}, "
             f"trash {len(diff.removed)}. Nothing written.")
@@ -312,6 +327,13 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
             log_event(conn, vid, "download_ok", {k: cols[k] for k in
                       ("itag", "codec", "bitrate", "file_size_bytes", "sha256", "download_seconds", "used_cookies")})
             res.added.append(vid)
+            res.bytes_downloaded += cols["file_size_bytes"] or 0
+            res.seconds_downloading += cols["download_seconds"] or 0
+            res.opus += str(got["codec"]).startswith("opus")
+            if (got["bitrate"] or 0) >= 200:
+                res.high_quality += 1
+            else:
+                res.standard_quality += 1
             log(f"  ok: itag {got['itag']} {got['codec']} {got['bitrate']}k")
             rep.download_ok(vid, got["itag"], got["codec"], got["bitrate"], cols["file_size_bytes"],
                             cols["download_seconds"])

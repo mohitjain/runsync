@@ -180,6 +180,12 @@ devices:
 
 **Goal:** one copy per real song; zero wrong merges.
 
+> **Status: built (`runsync dedupe` + the `runsync-dedupe` skill).** Decisions made while building:
+> - The test is the audio, not metadata: lead artist + title + version markers pick the candidates (a live/remix/cover is never a candidate), then chromaprint fingerprints are compared at every offset. On the real library the true duplicates scored 0.75 to 0.94 and different songs about 0.52, so: >= 0.85 merge, anything below that is asked (nothing is silently kept apart: two uploads with the same title and a shared artist would collide on file names). Live and remastered uploads merge into the studio version without a check (owner's rule). The ~3 s duration rule was dropped: music videos run 7 to 37 s longer than the audio upload.
+> - Removal is permanent (owner's choice, not `.trash/`): `dedupe` only previews; `--apply` deletes. An alias row keeps the merge visible and `--undo ID` queues the loser for download again; a >20% guard applies.
+> - Winner: a copy the player can use today (AAC) over Opus, then source (Topic/art track > artist's own channel > label channel > other > lyric video), then bitrate. (Source first would have deleted the only playable copy of 3 songs.)
+> - "Same song?" answers live in `dedupe_decisions` (state.db), not a YAML file.
+
 **Build**
 1. Level 1: same video in many playlists → one file, many references
 2. Level 2: same song, different upload — match on canonical identity (MusicBrainz recording ID or normalized artist+title) + duration within ~3 s; AcoustID fingerprint verifies doubtful pairs
@@ -187,7 +193,7 @@ devices:
 4. Winner ranking: Topic/official audio > label channel > music video > lyric video/random upload; ties → higher bitrate, then duration closest to album track
 5. Pre-download metadata pass (save bandwidth) + post-download fingerprint pass
 6. Losers recorded in `aliases` (never re-downloaded, playlists still resolve); merges reversible
-7. Ambiguous pairs → review "same song? y/n", answer stored in `overrides.yaml`
+7. Ambiguous pairs → "same song?" asked by the skill, answer stored in the database
 8. Every merge logged: "merged 3 uploads of X → kept Topic upload"
 
 **Acceptance**

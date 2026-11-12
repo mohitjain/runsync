@@ -109,5 +109,15 @@ steps, in order, and let the user choose:
 - Install only into Homebrew and this project's `.venv`. Do not use sudo and do not edit shell profiles.
 - Do not run `sync` for real, `resolve` for real, or touch `~/Music/RunSync` during setup; verification is dry-run only.
 - Report at the end as ONE table with two columns, icon and step, nothing else (no Result column, no paragraphs
-  before it). Icons: ✅ done, ❌ failed, ⚠️ needs attention, ⏸️ waiting. Rows: Homebrew, Tools, Project installed,
+  before it), composed by you, never pasted from a command. Example:
+
+  | | Setup |
+  |:-:|---|
+  | ✅ | Homebrew |
+  | ✅ | Tools |
+  | ✅ | Project installed |
+  | ✅ | Cookies |
+  | ⏸️ | Choose playlists |
+
+  Icons: ✅ done, ❌ failed, ⚠️ needs attention, ⏸️ waiting. Rows: Homebrew, Tools, Project installed,
   Cookies, Playlists. After the table, at most one line, and only if something is ❌ or ⚠️, saying what the user must do.

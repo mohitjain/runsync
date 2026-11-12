@@ -221,3 +221,15 @@ def test_file_deleted_by_hand_is_redownloaded(world):
     world.downloads.clear()
     world.run()
     assert world.downloads == ["t1"] and "t1.m4a" in world.master_files()
+
+
+def test_result_dict_has_the_facts_the_skills_present(world):
+    world.add_playlist("P", ids(3))
+    world.behaviour["t1"] = PermanentError("Video unavailable")
+    d = world.run().to_dict()
+    assert (d["added"], d["unavailable"], d["removed"], d["failed"]) == (2, 1, 0, [])
+    assert d["high_quality"] == 2 and d["standard_quality"] == 0 and d["opus"] == 0
+    assert d["bytes"] > 0 and d["aborted"] is None
+    world.add_playlist("Q", ids(2, "q"))
+    world.behaviour["q0"] = RuntimeError("boom")
+    assert world.run().to_dict()["failed"] == [{"id": "q0", "reason": "boom"}]

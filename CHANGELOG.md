@@ -4,6 +4,9 @@
 
 ### Phase 2a: metadata, language, covers
 - `runsync resolve`: tiers YouTube fields, title parser, MusicBrainz, iTunes; confidence, trust order and a review queue (`review.csv`).
+- `sync --json` and `resolve --json` (facts on stdout, normal output on stderr); the skills present them: every report is one icon table, the `runsync` orchestrator shows a card after each step, and `runsync-enrich` reports answers with source links.
+- `runsync status` + `runsync-status` skill: progress bar, rate and time left; schedulable with `/loop 5m /runsync-status`.
+- `runsync dedupe` + `runsync-dedupe` skill (Phase 3): audio-fingerprint duplicate detection, best-source winner, permanent removal with `--apply`, aliases, `--undo`, mass-delete guard.
 - Skills are the interface: `runsync` (orchestrator), `runsync-setup`, `runsync-playlists`, `runsync-enrich`. The CLI is four commands (`playlists`, `add-playlist`, `sync`, `resolve`); the interactive playlist picker, `label` and `info` were removed because no skill could use them.
 - Corrections (per track and per artist) live in `state.db` and always win; fixes typed into `review.csv` are imported automatically.
 - `enrich.csv` + the `runsync-enrich` skill: unresolved tracks and unlabelled artists are searched on the web from a Claude Code session (no API key); only answers with a source link and confidence >= 0.85 are applied.
