@@ -59,12 +59,18 @@ class RunResult:
     seconds_downloading: float = 0.0
     high_quality: int = 0                # >= 200 kbps (the Premium ~258 kbps tier)
     standard_quality: int = 0            # below that (~129 kbps uploads)
-    opus: int = 0                        # masters that are not AAC (no player copy until Phase 4)
+    opus: int = 0                        # masters that are not AAC (they get a FLAC player copy)
+    tracks: list[dict] = field(default_factory=list)            # every download of this run, for the skills to list
+    names: dict[str, str] = field(default_factory=dict)         # video id -> title, for every track attempted
+    unavailable_reasons: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Facts for the skills to present (see `runsync sync --json`)."""
         return {"added": len(self.added), "removed": len(self.removed), "unavailable": len(self.unavailable),
-                "failed": [{"id": v, "reason": r} for v, r in self.failed], "aborted": self.aborted,
+                "failed": [{"id": v, "title": self.names.get(v, v), "reason": r} for v, r in self.failed],
+                "unavailable_tracks": [{"id": v, "title": self.names.get(v, v), "reason": self.unavailable_reasons.get(v, "")}
+                                       for v in self.unavailable],
+                "tracks": self.tracks, "aborted": self.aborted,
                 "anonymous": self.anonymous, "queue_total": self.queue_total,
                 "bytes": self.bytes_downloaded, "seconds": round(self.seconds_downloading),
                 "high_quality": self.high_quality, "standard_quality": self.standard_quality, "opus": self.opus}
@@ -311,7 +317,8 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
     errors: dict[str, int] = {}
     for n, vid in enumerate(todo, 1):
         log(f"[{n}/{len(todo)}] downloading {vid}")
-        rep.download_start(n, len(todo), vid, titles.get(vid) or _db_title(conn, vid))
+        res.names[vid] = titles.get(vid) or _db_title(conn, vid)
+        rep.download_start(n, len(todo), vid, res.names[vid])
         conn.execute("UPDATE tracks SET attempts = attempts + 1, last_attempt_at = ? WHERE video_id = ?",
                      (now_iso(), vid))
         try:
@@ -330,6 +337,10 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
             res.bytes_downloaded += cols["file_size_bytes"] or 0
             res.seconds_downloading += cols["download_seconds"] or 0
             res.opus += str(got["codec"]).startswith("opus")
+            res.tracks.append({"id": vid, "title": res.names[vid], "codec": str(got["codec"]).split(".")[0],
+                               "kbps": round(got["bitrate"] or 0), "bytes": cols["file_size_bytes"] or 0,
+                               "seconds": round(cols["download_seconds"] or 0),
+                               "quality": "high" if (got["bitrate"] or 0) >= 200 else "standard"})
             if (got["bitrate"] or 0) >= 200:
                 res.high_quality += 1
             else:
@@ -342,6 +353,7 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
             update_track(conn, vid, status="unavailable", last_error=str(exc)[:300])
             log_event(conn, vid, "unavailable", {"reason": str(exc)[:300]})
             res.unavailable.append(vid)
+            res.unavailable_reasons[vid] = str(exc)[:200]
             log(f"  unavailable: {exc}")
             rep.download_unavailable(vid, str(exc))
         except Exception as exc:

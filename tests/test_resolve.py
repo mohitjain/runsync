@@ -319,3 +319,24 @@ def test_result_dict_and_cli_json_for_the_skills(cfg, lib, monkeypatch):
     out = CliRunner().invoke(app, ["resolve", "--offline", "--no-build", "--json"])
     last = [ln for ln in out.output.splitlines() if ln.startswith("{")][-1]
     assert jsonlib.loads(last)["dry_run"] is False
+
+
+@needs_ffmpeg
+def test_result_lists_every_track_with_what_was_tagged_and_what_was_built(cfg, lib):
+    add_track(lib, "a", make_m4a(cfg.master / "a.m4a"), **YT)
+    add_track(lib, "held", None, original_title="Mystery clip", channel="Someone")      # no artist: held for review
+    res = run_resolve(cfg, lib, http=FakeHttp(genre="Rock"), cover_fn=lambda *x, **k: (cfg.cache / "c.jpg", "itunes"),
+                      analyse_fn=fake_gain)
+    d = res.to_dict()
+    by_id = {t["id"]: t for t in d["tracks"]}
+    a = by_id["a"]
+    assert (a["before"], a["artist"], a["title"], a["album"], a["year"], a["language"]) == (
+        "In Pieces", "Linkin Park", "In Pieces", "Minutes to Midnight", 2007, "english")
+    assert a["tier"] == "youtube" and a["confidence"] >= 0.9 and a["review"] is None
+    assert (a["file"], a["format"], a["gain_db"], a["cover"]) == ("In Pieces.m4a", "m4a", -8.0, "itunes") and a["size"] > 0
+    assert by_id["held"]["review"] and by_id["held"]["file"] is None                    # held: listed with its reason
+    # a track that is only built this run (resolved earlier) is still listed
+    lib.execute("UPDATE tracks SET player_path = NULL WHERE video_id = 'a'")
+    again = run_resolve(cfg, lib, http=FakeHttp(genre="Rock"), cover_fn=no_cover, analyse_fn=fake_gain).to_dict()
+    built = {t["id"]: t for t in again["tracks"]}["a"]
+    assert built["artist"] == "Linkin Park" and built["file"] == "In Pieces.m4a" and built["format"] == "m4a"
