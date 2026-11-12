@@ -27,9 +27,9 @@ Every report is **one markdown table with an icon column and a short text column
   (the Download and Tagging cards are the exception: see Detail tables),
   no paragraph before or after; at most one line under the table, only when the user must act.
 
-## Detail tables (Download and Tagging)
+## Detail tables (Download, Tagging and YouTube)
 
-The owner wants to see **every track**, not only totals. For the Download and Tagging cards the single table gets one
+The owner wants to see **every track**, not only totals. For the Download, Tagging and YouTube cards the single table gets one
 row per track after the summary rows; it is still one table with an icon column first and the report named in the
 header. Take the rows from the JSON `tracks` lists, in order. Show every track up to 40; beyond that show the first 40
 and ask with AskUserQuestion "Show the other N?" (`Show all` / `Skip`) instead of one huge message.
@@ -161,13 +161,17 @@ in to YouTube (optional)" and move on, never ask here. Signed in: `uv run runsyn
 If the Download step found unavailable songs with a title on record, offer once with AskUserQuestion "Search replacements
 for N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill.
 
-Card:
+Card: the detail table of the sub-skill (every song removed, swapped or added, from `applied.items`), then the live check
+from `applied.verify` ("Checked on YouTube: N of N changes confirmed", before → after counts per playlist). Never show a
+✅ for a change the read-back did not confirm.
 
-| | YouTube |
-|:-:|---|
-| ✅ | 112 repeats and duplicates removed |
-| 🔄 | 21 songs swapped to the kept upload |
-| 🔎 | 9 replacements added to rerunsync |
+| | YouTube · 21 changes | |
+|:-:|---|---|
+| 🔁 | Refresh · Akhiyaan Gulaab | 4 repeated entries removed, 1 stays |
+| 🔄 | Refresh · Suit Full Video Song | replaced by "Suit (Audio)" |
+| ✅ | Checked on YouTube | 21 of 21 changes confirmed |
+| ✅ | Refresh | 294 → 273 songs |
+| 🔎 | rerunsync | 9 replacements added |
 
 ## 8. Card
 
@@ -207,6 +211,7 @@ Then at most one line, only if something needs the user (for example: the card w
 - Never delete, trash, or pass `--force-delete` or `--force`; never touch `master/`. Duplicate removal happens only inside
   the **runsync-dedupe** skill, after the user confirms.
 - Never print `cookies.txt`. A rejected cookie is a ❌ that sends the user to the export steps, not something to retry.
+- YouTube writes happen once per confirmed plan, then the command reads the result back once; do not add reads in between.
 - YouTube writes (cleanup, adds) happen only inside the **runsync-youtube**, **runsync-replace** and **runsync-add** skills,
   after the user confirms the exact plan. Never print `client_secret.json` or `youtube_token.json`.
 - A card per step, always. Do not explain steps that went fine.

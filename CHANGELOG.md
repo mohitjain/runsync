@@ -7,6 +7,7 @@
 - Playlists are read through the API when signed in (cookies are no longer needed for reading and are the fallback); Liked Music and Watch later stay on cookies. `playlists --json` reports the `source`.
 - `youtube --cleanup` / `--apply --confirm ID` / `--undo`: removes repeated entries and the losing uploads of songs `dedupe` merged from your YouTube playlists. A song missing from a playlist is swapped (the kept upload is added before the loser is removed). Journalled and undoable; Liked Music, Liked videos and Watch later are never written. Merged tracks leaving a playlist no longer count as removals in `sync`.
 - `youtube --search`, `--replacements`, `--add IDS --to PLAYLIST [--create]`: find replacements for unavailable songs (no quota), add songs to a playlist, and make the private `rerunsync` playlist, which is selected so the next refresh downloads it.
+- After the writes the command reads the playlists back from YouTube once and checks every change (the entry is gone, the kept upload is there, counts match; it waits out YouTube's short lag). `applied.items` lists every song that changed and `applied.verify` the result; the skills show both.
 - Skills `runsync-youtube`, `runsync-replace`, `runsync-add`, and a YouTube step in the `runsync` orchestrator.
 - Tests can no longer reach Google (an autouse fixture blocks the transport).
 

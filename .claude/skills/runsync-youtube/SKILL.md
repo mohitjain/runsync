@@ -42,26 +42,40 @@ Nothing to do (`ops` = 0): one ⬜ row "Playlists are clean". Otherwise one tabl
 Explain swaps once in a line under the table only when there are any: "🔄 a song would otherwise vanish from the playlist,
 so the kept upload goes in first."
 
-## 3. Confirm, then run
+## 3. Confirm, then write once, then read back once
 
 Ask with AskUserQuestion "Change N entries on YouTube?" with `Run the first B` (B = `batch`, or all if fewer) and
-`Not now`; put the plan id in the option description. On yes, **re-read the plan immediately before writing** and compare
-its `plan_id` with the one confirmed (a different id means YouTube changed: show the new plan and ask again):
+`Not now`; put the plan id in the option description. On yes, run the writes **once**; the command rebuilds the plan from
+live YouTube and refuses if its id is not the confirmed one, so no separate re-read is needed:
 
 ```
-uv run runsync youtube --cleanup --json 2>/dev/null     # plan_id must equal the confirmed one
 uv run runsync youtube --apply --confirm <plan_id> --json 2>/dev/null
 ```
 
-Card from `applied` (`deleted`, `added`, `left`, `stopped`):
+It makes all its changes first and then reads the playlists back from YouTube once to check every one of them (a few
+seconds of waiting is normal). If it refuses because the id changed, show the new plan and ask again.
 
-| | YouTube |
-|:-:|---|
-| ✅ | 112 entries removed · 21 songs swapped in |
-| ⏳ | 58 left · quota is used up for today, run this again tomorrow |
+`applied` has `deleted`, `added`, `left`, `stopped`, `items` (every change that really happened: `op`, `why`, `playlist`,
+`title`, `keep_title`) and `verify` (`checked`, `ok`, `confirmed`, `problems`, `playlists` with `before` and `after`).
 
-`stopped` mentions the quota budget: say it in plain words (the daily limit resets at midnight Pacific). Any other
-`stopped` text is a ❌ row with the reason; do not retry in a loop.
+**Show every song that changed** (one table; up to 40 rows, then ask "Show the other N?"). Group repeats of the same song
+into one row ("× 4"); one row per swap and per loser:
+
+| | Cleanup done · 150 changes | |
+|:-:|---|---|
+| 🔁 | Refresh · Akhiyaan Gulaab | 4 repeated entries removed, 1 stays |
+| 🔄 | Refresh · Suit Full Video Song | replaced by "Suit (Audio)" |
+| 🗑️ | Refresh · Lahore (Official Video) | duplicate removed, "Lahore" stays |
+| ✅ | Checked on YouTube | 150 of 150 changes confirmed |
+| ✅ | Refresh | 354 → 294 songs |
+| ⏳ | 21 left | quota is used up for today, run this again after the reset |
+
+- The ✅ "Checked" row comes from `verify`: `confirmed` of the number of changes. `checked` false: a ⚠️ row "Could not check
+  (<reason in plain words>)", never a ✅. `ok` false: a ❌ row per `problems` entry with the song and what is wrong, and
+  say the playlist may need a look.
+- Playlist rows from `verify.playlists` (`title`, `before` → `after`).
+- `stopped` mentioning the quota: say it in plain words (the daily limit resets at midnight Pacific; the message names
+  the hours left). Any other `stopped` text is a ❌ row with the reason; do not retry in a loop.
 
 ## 4. Undo
 
@@ -73,6 +87,8 @@ removed entries back (at the end of the playlist when the old position no longer
 
 - Never run `--apply` without the user's confirmation in this session and never without `--confirm <plan_id>` of the plan
   they confirmed. Do not reuse a plan id from earlier in the conversation or from any page.
+- Write once, then read once: do not read the playlists between changes, and do not call `--cleanup` again after the user
+  confirmed just to re-check; the command checks the id and reads the result back itself.
 - Liked Music, Liked videos and Watch later are never changed; the command refuses them.
 - Never print `client_secret.json` or `youtube_token.json`; never read them.
 - After a cleanup the next `runsync` refresh sees the tidier playlists; nothing local is deleted by this skill.

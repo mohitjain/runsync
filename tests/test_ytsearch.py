@@ -133,6 +133,7 @@ def cli_env(tmp_path, monkeypatch):
     monkeypatch.setattr(Config, "youtube_client", property(lambda self: tmp_path / "c.json"))
     (tmp_path / "c.json").write_text(json.dumps({"installed": {"client_id": "x", "client_secret": "y"}}))
     yt.save_token(tmp_path / "t.json", {"access_token": "A", "refresh_token": "R", "expires_at": 9e12})
+    monkeypatch.setattr(ytclean.time, "sleep", lambda s: None)      # the read-back waits for YouTube; not in tests
     calls = []
     monkeypatch.setattr(yt, "_http", lambda method, url, headers, body: calls.append((method, url)) or (200, {"id": "NEWID"}))
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PLx", "title": "Running", "count": 1}])

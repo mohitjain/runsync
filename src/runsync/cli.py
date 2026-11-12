@@ -883,7 +883,8 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                                 "skipped": skipped}
                 if apply:
                     r = ytclean.apply_plan(api, conn, aplan, confirm, batch)
-                    facts["applied"] = {"added": r.added, "created": r.created, "left": r.left, "stopped": r.stopped}
+                    facts["applied"] = {"added": r.added, "created": r.created, "left": r.left, "stopped": r.stopped,
+                                        "items": _applied_items(r), "verify": ytclean.verify(api, r)}
                     console.print(f"\u2705 Added {r.added} song(s)" + (", playlist created" if r.created else "")
                                   + (f" ({_esc(r.stopped)})" if r.stopped else "."))
             facts["units_today"] = api.units_today()
@@ -899,11 +900,13 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                     facts["cleanup"] = {**ytclean.summary(plan), "days": ytclean.days_needed(plan, cfg.youtube_budget),
                                         "batch": batch,
                                         "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
-                                                   "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id}
+                                                   "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id,
+                                                   "keep_title": o.keep_title}
                                                   for o in plan.ops]}
                     if apply:
                         r = ytclean.apply_plan(api, conn, plan, confirm, batch)
-                        facts["applied"] = {"deleted": r.deleted, "added": r.added, "left": r.left, "stopped": r.stopped}
+                        facts["applied"] = {"deleted": r.deleted, "added": r.added, "left": r.left, "stopped": r.stopped,
+                                            "items": _applied_items(r), "verify": ytclean.verify(api, r)}
                         console.print(f"\u2705 Cleaned: {r.deleted} removed, {r.added} added, {r.left} still to do"
                                       + (f" ({_esc(r.stopped)})" if r.stopped else "."))
             facts["units_today"] = api.units_today()
@@ -941,6 +944,12 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                   + f" \u00b7 quota today {facts['units_today']} of {facts['budget']}")
     for p in facts.get("playlists", []):
         console.print(f"  \U0001f4cb {_esc(p['title'])} \u00b7 {p['count']}")
+
+
+def _applied_items(r) -> list[dict]:
+    """What was really changed, one row per change (the skill shows these)."""
+    return [{"op": o.kind, "why": o.why, "playlist": r.playlists.get(o.playlist_id, o.playlist_id), "video_id": o.video_id,
+             "title": o.title, "keep_id": o.keep_id, "keep_title": o.keep_title} for o in r.ops_done if o.kind != "create"]
 
 
 def _clip(text: str, width: int = 72) -> str:

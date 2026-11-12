@@ -194,6 +194,7 @@ def cli_env(tmp_path, monkeypatch):
     monkeypatch.setattr(Config, "youtube_client", property(lambda self: tmp_path / "c.json"))
     (tmp_path / "c.json").write_text(json.dumps({"installed": {"client_id": "x", "client_secret": "y"}}))
     yt.save_token(tmp_path / "t.json", {"access_token": "A", "refresh_token": "R", "expires_at": 9e12})
+    monkeypatch.setattr(ytclean.time, "sleep", lambda s: None)      # the read-back waits for YouTube; not in tests
     calls = []
     monkeypatch.setattr(yt, "_http", lambda method, url, headers, body: calls.append(method) or (200, {}))
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 3}])
@@ -233,7 +234,10 @@ def test_apply_through_the_command_needs_the_exact_plan_id(cli_env):
     assert refused.exit_code == 2 and calls == [] and "Not confirmed" in json.loads(refused.stdout)["error"]
     assert _run(cli, "--apply", "--json").exit_code == 2 and calls == []
     ok = _run(cli, "--apply", "--confirm", plan_id, "--json")
-    assert ok.exit_code == 0 and json.loads(ok.stdout)["applied"]["deleted"] == 1 and calls == ["DELETE"]
+    applied = json.loads(ok.stdout)["applied"]
+    assert ok.exit_code == 0 and applied["deleted"] == 1 and calls == ["DELETE"]
+    assert applied["items"][0]["title"] == "Title a" and applied["items"][0]["why"] == "repeat"      # which song went
+    assert applied["verify"]["checked"] is True
 
 
 def test_cleanup_when_not_signed_in_says_so(tmp_path, monkeypatch):
@@ -243,3 +247,81 @@ def test_cleanup_when_not_signed_in_says_so(tmp_path, monkeypatch):
     monkeypatch.setattr(Config, "youtube_token", property(lambda self: tmp_path / "none.json"))
     out = _run(cli, "--cleanup", "--json")
     assert out.exit_code == 2 and "sign in" in json.loads(out.stdout)["error"].lower()
+
+
+# ---- the read-back after the writes ------------------------------------------------------------------------------------
+
+def _applied(ops, before):
+    return ytclean.Applied(run_id=1, done=len(ops), ops_done=ops, before=before, playlists={"PL1": "Running"})
+
+
+def _live(monkeypatch, *states):
+    """Each read of the playlist returns the next state (the last one repeats): lets a test model YouTube's lag."""
+    reads = []
+
+    def read(api, pid):
+        reads.append(pid)
+        return states[min(len(reads) - 1, len(states) - 1)]
+    monkeypatch.setattr(yt, "playlist_entries", read)
+    return reads
+
+
+OPS = [Op("add", "PL1", "win", "", 1, "swap", "Win", "win", "Win"),
+       Op("delete", "PL1", "lose", "item-1-lose", 1, "swap", "Lose", "win", "Win"),
+       Op("delete", "PL1", "a", "item-3-a", 3, "repeat", "A", "a", "A")]
+
+
+def test_verify_confirms_every_change_and_the_counts(monkeypatch):
+    live = [yt.Entry("a", "item-0-a", 0, "A", "c", True), yt.Entry("win", "new", 1, "Win", "c", True)]
+    _live(monkeypatch, live)
+    sleeps = []
+    v = ytclean.verify(object(), _applied(OPS, {"PL1": 3}), sleep=sleeps.append)
+    assert v["checked"] and v["ok"] and v["confirmed"] == 3 and v["problems"] == [] and sleeps == []
+    assert v["playlists"] == [{"id": "PL1", "title": "Running", "before": 3, "after": 2, "expected": 2}]
+
+
+def test_verify_waits_out_youtubes_lag_then_passes(monkeypatch):
+    stale = [yt.Entry("a", "item-0-a", 0, "A", "c", True), yt.Entry("lose", "item-1-lose", 1, "Lose", "c", True),
+             yt.Entry("a", "item-3-a", 3, "A", "c", True)]
+    fresh = [yt.Entry("a", "item-0-a", 0, "A", "c", True), yt.Entry("win", "new", 1, "Win", "c", True)]
+    reads = _live(monkeypatch, stale, fresh)
+    sleeps = []
+    v = ytclean.verify(object(), _applied(OPS, {"PL1": 3}), sleep=sleeps.append)
+    assert v["ok"] and len(reads) == 2 and sleeps == [3]
+
+
+def test_verify_reports_an_entry_that_is_still_there_after_the_retries(monkeypatch):
+    still = [yt.Entry("a", "item-0-a", 0, "A", "c", True), yt.Entry("win", "new", 1, "Win", "c", True),
+             yt.Entry("a", "item-3-a", 3, "A", "c", True)]
+    _live(monkeypatch, still)
+    sleeps = []
+    v = ytclean.verify(object(), _applied(OPS, {"PL1": 3}), sleep=sleeps.append)
+    assert not v["ok"] and v["confirmed"] == 2 and sleeps == [3, 8, 15]
+    assert v["problems"][0]["problem"] == "the entry is still in the playlist" and v["problems"][0]["title"] == "A"
+
+
+def test_verify_reports_a_kept_upload_that_is_missing_and_a_song_that_vanished(monkeypatch):
+    _live(monkeypatch, [yt.Entry("x", "item-9-x", 9, "X", "c", True)])
+    v = ytclean.verify(object(), _applied(OPS[1:], {"PL1": 3}), sleep=lambda s: None)
+    kinds = {p["problem"] for p in v["problems"]}
+    assert not v["ok"] and kinds == {"the kept upload is missing from the playlist", "no copy of the song is left in the playlist"}
+
+
+def test_verify_when_google_will_not_answer_says_it_could_not_check(monkeypatch):
+    def boom(api, pid):
+        raise yt.QuotaError("quota used up")
+    monkeypatch.setattr(yt, "playlist_entries", boom)
+    v = ytclean.verify(object(), _applied(OPS, {"PL1": 3}), sleep=lambda s: None)
+    assert v["checked"] is False and "quota" in v["reason"]
+
+
+def test_verify_with_nothing_done_is_trivially_fine():
+    assert ytclean.verify(object(), ytclean.Applied(run_id=1))["ok"]
+
+
+def test_apply_returns_what_it_really_did_for_the_read_back(conn):
+    api, plan = FakeApi(), swap_plan()
+    plan.counts["PL1"] = 4
+    r = ytclean.apply_plan(api, conn, plan, ytclean.plan_id(plan), batch=2)
+    assert [(o.kind, o.video_id) for o in r.ops_done] == [("add", "win"), ("delete", "lose")]    # only what ran
+    assert r.before == {"PL1": 4} and r.playlists == {"PL1": "Running"}
