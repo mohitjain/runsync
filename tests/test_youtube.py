@@ -356,3 +356,14 @@ def test_merge_remote_prefers_the_api_and_falls_back_to_cookies(conn, monkeypatc
     assert cli._merge_remote(conn, object(), api=object()) == "cookies"
     with pytest.raises(RuntimeError):
         cli._merge_remote(conn, None, api=object())       # API down and no cookies: an error, never an empty list
+
+
+def test_adding_at_a_position_falls_back_when_the_playlist_is_sorted_automatically(files):
+    sorted_error = (400, {"error": {"message": "Playlist should use manual sorting", "errors": [{"reason": "manualSortRequired"}]}})
+    a, t = api(files, sorted_error, (200, {"id": "ITEM"}))
+    assert yt.add_entry(a, "PL1", "vid1", position=5) == "ITEM"
+    assert t.calls[0][3]["snippet"]["position"] == 5 and "position" not in t.calls[1][3]["snippet"]
+    a, t = api(files, (400, {"error": {"message": "other", "errors": [{"reason": "invalidPosition"}]}}))
+    with pytest.raises(YouTubeError, match="invalidPosition"):
+        yt.add_entry(a, "PL1", "vid1", position=5)            # any other error is still an error
+    assert len(t.calls) == 1

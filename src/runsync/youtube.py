@@ -347,7 +347,14 @@ def add_entry(api: Api, playlist_id: str, video_id: str, position: int | None = 
     sn: dict = {"playlistId": playlist_id, "resourceId": {"kind": "youtube#video", "videoId": video_id}}
     if position is not None:
         sn["position"] = position
-    return api.request("POST", "playlistItems", {"part": "snippet"}, {"snippet": sn})["id"]
+    try:
+        return api.request("POST", "playlistItems", {"part": "snippet"}, {"snippet": sn})["id"]
+    except YouTubeError as exc:
+        if position is None or "manualSortRequired" not in str(exc):
+            raise
+        # The playlist is sorted automatically (for example by date added), so it has no positions: add at the default place.
+        sn.pop("position")
+        return api.request("POST", "playlistItems", {"part": "snippet"}, {"snippet": sn})["id"]
 
 
 def delete_entry(api: Api, item_id: str) -> None:
