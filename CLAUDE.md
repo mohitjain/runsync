@@ -1,6 +1,6 @@
 # runsync: notes for Claude Code
 
-Read `PLAN.md` first: it holds the locked decisions and phase order. Work phase by phase and stop at each human checkpoint.
+Read `DESIGN.md` first: it holds the locked decisions and the open items. Stop at each human checkpoint.
 
 ## Commands
 
