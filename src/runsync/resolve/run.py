@@ -51,6 +51,7 @@ class ResolveResult:
     enrich_applied: int = 0      # suggestions from enrich.csv written into the overrides table
     enrich_open: int = 0         # rows still waiting for a search
     unlabelled: dict[str, int] = field(default_factory=dict)   # artists with no language yet, and their track counts
+    tracks: dict[str, dict] = field(default_factory=dict)      # per track: what was resolved and what was built
 
     def to_dict(self) -> dict:
         """Facts for the skills to present (see `runsync resolve --json`)."""
@@ -59,7 +60,8 @@ class ResolveResult:
                 "build_skipped": self.build_skipped, "covers": self.covers, "unlabelled": dict(self.unlabelled),
                 "imported_fixes": self.imported_fixes, "enrich_applied": self.enrich_applied,
                 "enrich_open": self.enrich_open, "lookups_fetched": self.lookups_fetched,
-                "lookups_cached": self.lookups_cached, "lookups_failed": self.lookups_failed}
+                "lookups_cached": self.lookups_cached, "lookups_failed": self.lookups_failed,
+                "tracks": list(self.tracks.values())}
 
 
 def _now() -> str:
@@ -99,6 +101,14 @@ def _track_languages(conn, best: Candidate, row, spec: dict | None, http, overri
     if here:
         return [here]
     return labels[0][:1] if labels and labels[0] else []   # the lead artist decides; collaborators do not vote
+
+
+def _track_record(vid: str, original_title: str | None, cand: Candidate, languages: list[str], review: str | None) -> dict:
+    """What this run decided for one track (the skills list it). Build facts are added later by _build_all."""
+    return {"id": vid, "before": original_title or "", "artist": ", ".join(cand.artists[:3]), "title": cand.title,
+            "album": cand.album, "year": cand.year, "language": "/".join(languages) or None, "tier": cand.tier,
+            "confidence": round(cand.confidence, 2), "review": review, "file": None, "format": None, "size": None,
+            "cover": None, "gain_db": None}
 
 
 def _review_reason(cand: Candidate, languages: list[str], title_ok: bool) -> str | None:
@@ -185,6 +195,7 @@ def run_resolve(cfg: Config, conn: sqlite3.Connection, *, dry_run: bool = False,
                 res.unlabelled[best.artists[0]] = res.unlabelled.get(best.artists[0], 0) + 1
             if dry_run:
                 rep.resolved(vid, row["original_title"] or "", best, review, tuple(languages))
+                res.tracks[vid] = _track_record(vid, row["original_title"], best, languages, review)
                 res.resolved += 1
                 res.by_tier[best.tier] = res.by_tier.get(best.tier, 0) + 1
                 res.review += 1 if review else 0
@@ -201,6 +212,7 @@ def run_resolve(cfg: Config, conn: sqlite3.Connection, *, dry_run: bool = False,
             res.by_tier[best.tier] = res.by_tier.get(best.tier, 0) + 1
             res.review += 1 if review else 0
             rep.resolved(vid, row["original_title"] or "", best, review, tuple(languages))
+            res.tracks[vid] = _track_record(vid, row["original_title"], best, languages, review)
         except Exception as e:  # one bad track never stops the run
             log.exception("resolve failed for %s", vid)
             rep.warn(f"{vid}: {type(e).__name__}: {e}")
@@ -230,6 +242,11 @@ def _build_all(cfg, conn, res, rep, cover_fn, analyse_fn, online: bool) -> None:
         vid = r["video_id"]
         if r["needs_review"]:
             res.held += 1
+            res.tracks.setdefault(vid, {"id": vid, "before": "", "artist": r["artist"], "title": r["title"],
+                                        "album": r["album"], "year": r["year"], "language": r["language"],
+                                        "tier": r["source_tier"], "confidence": r["confidence"],
+                                        "review": r["review_reason"], "file": None, "format": None, "size": None,
+                                        "cover": None, "gain_db": None})
             continue
         master = Path(r["master_path"] or "")
         if not master.exists():
@@ -268,6 +285,14 @@ def _build_all(cfg, conn, res, rep, cover_fn, analyse_fn, online: bool) -> None:
             conn.commit()
             res.built += 1
             rep.built(vid, out["filename"], out["size"])
+            rec = res.tracks.setdefault(vid, {"id": vid, "before": r["original_title"] or "",
+                                              "artist": r["artist"], "title": r["title"], "album": r["album"],
+                                              "year": r["year"], "language": r["language"], "tier": r["source_tier"],
+                                              "confidence": r["confidence"], "review": None})
+            m2 = conn.execute("SELECT cover_source, replaygain_gain_db FROM metadata WHERE video_id = ?", (vid,)).fetchone()
+            rec.update({"file": out["filename"], "format": out["format"], "size": out["size"],
+                        "cover": m2["cover_source"] if m2 else None,
+                        "gain_db": round(m2["replaygain_gain_db"], 2) if m2 and m2["replaygain_gain_db"] is not None else None})
         except Exception as e:
             log.exception("player build failed for %s", vid)
             rep.warn(f"{vid}: build failed: {type(e).__name__}: {e}")

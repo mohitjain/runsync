@@ -38,3 +38,14 @@ def add_track(conn, vid: str, master: Path | None = None, **cols) -> None:
 @pytest.fixture
 def conn(tmp_path):
     return db.connect(tmp_path / "state.db")
+
+
+@pytest.fixture(autouse=True)
+def no_google_network(monkeypatch):
+    """No test may reach Google: the YouTube transport and token exchange fail loudly unless a test replaces them."""
+    from runsync import youtube
+
+    def blocked(*args, **kwargs):
+        raise AssertionError("a test tried to contact Google; pass a fake transport")
+    monkeypatch.setattr(youtube, "_http", blocked)
+    monkeypatch.setattr(youtube, "_post_form", blocked)

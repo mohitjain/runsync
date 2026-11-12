@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import logging
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yt_dlp
 
+from . import youtube as yt
 from .logs import YtdlpLogger
 
 log = logging.getLogger("runsync.fetch")
@@ -28,6 +30,7 @@ class PlaylistItems:
     ids: list[str] = field(default_factory=list)        # available video ids, in order
     titles: dict[str, str] = field(default_factory=dict)
     unknown: list[str] = field(default_factory=list)    # private/deleted: present but unreadable
+    source: str = "cookies"                              # "api" when the YouTube API answered
 
 
 def _opts(cookies: Path | None) -> dict:
@@ -79,7 +82,46 @@ def parse_entries(entries: list[dict]) -> PlaylistItems:
     return items
 
 
-def fetch_playlist_items(url: str, cookies: Path | None) -> PlaylistItems:
+API_UNREADABLE = {"LM", "WL"}   # the API cannot read YouTube Music likes or Watch later: those use cookies
+
+
+def playlist_id(url: str) -> str:
+    return (urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("list") or [""])[0]
+
+
+def api_account_playlists(api: yt.Api) -> list[PlaylistInfo]:
+    """Your playlists through the API, plus the special ones the API does not list (same set the cookies give)."""
+    out = [PlaylistInfo(p["id"], p["title"], f"https://www.youtube.com/playlist?list={p['id']}") for p in yt.my_playlists(api)]
+    out.append(PlaylistInfo("LL", "Liked videos", "https://www.youtube.com/playlist?list=LL"))
+    out.append(PlaylistInfo("WL", "Watch later", "https://www.youtube.com/playlist?list=WL"))
+    out.append(PlaylistInfo("LM", "Liked Music", "https://music.youtube.com/playlist?list=LM"))
+    return out
+
+
+def api_playlist_items(api: yt.Api, pid: str) -> PlaylistItems:
+    """The API's answer in the same shape yt-dlp gives (repeats kept, deleted/private ones in `unknown`)."""
+    items = PlaylistItems(source="api")
+    for e in yt.playlist_entries(api, pid):
+        if e.available:
+            items.ids.append(e.video_id)
+            items.titles[e.video_id] = e.title
+        else:
+            items.unknown.append(e.video_id)
+    return items
+
+
+def fetch_playlist_items(url: str, cookies: Path | None, api: yt.Api | None = None) -> PlaylistItems:
+    """Through the API when signed in (no cookies needed); any API problem or an empty answer falls back to yt-dlp."""
+    pid = playlist_id(url)
+    if api is not None and pid and pid not in API_UNREADABLE:
+        try:
+            items = api_playlist_items(api, pid)
+            if items.ids or items.unknown:
+                log.info("playlist %s via API: %d ok, %d unreadable", pid, len(items.ids), len(items.unknown))
+                return items
+            log.info("playlist %s: the API returned nothing; trying cookies", pid)
+        except yt.YouTubeError as exc:
+            log.warning("playlist %s: API failed (%s); falling back to cookies", pid, exc)
     log.info("fetching playlist %s (cookies=%s)", url, bool(cookies))
     t0 = time.monotonic()
     try:

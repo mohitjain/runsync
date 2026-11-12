@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import subprocess
 import sys
 from contextlib import nullcontext
@@ -20,7 +21,8 @@ from rich.progress import (
 )
 from rich.table import Table
 
-from . import db, fetch
+from . import db, fetch, ytclean, ytsearch
+from . import youtube as yt
 from .card import (
     apply_card_plan,
     build_card_plan,
@@ -86,9 +88,19 @@ def _cookie_hint(force: bool = False) -> None:
             "  3. Export youtube.com cookies, save over [bold]cookies.txt[/], then close the window")
 
 
-def _merge_remote(conn, cookies: Path) -> int:
-    """Upsert account playlists from YouTube, keeping saved selection. Unselected ones that vanished are dropped."""
-    found = fetch.fetch_account_playlists(cookies)
+def _merge_remote(conn, cookies: Path | None, api=None) -> str:
+    """Upsert account playlists from YouTube (the API when signed in, else cookies), keeping saved selection.
+    Unselected ones that vanished are dropped. Returns the source used: "api" or "cookies"."""
+    found, source = None, "cookies"
+    if api is not None:
+        try:
+            found, source = fetch.api_account_playlists(api), "api"
+        except yt.YouTubeError as exc:
+            logging.getLogger("runsync.cli").warning("playlist list via API failed (%s); using cookies", exc)
+    if found is None:
+        if cookies is None:
+            raise RuntimeError("no YouTube login and no usable cookies")
+        found = fetch.fetch_account_playlists(cookies)
     for p in found:
         conn.execute("INSERT INTO playlists (id, title, url, kind) VALUES (?, ?, ?, 'account') "
                      "ON CONFLICT(id) DO UPDATE SET title = excluded.title", (p.id, p.title, p.url))
@@ -97,7 +109,7 @@ def _merge_remote(conn, cookies: Path) -> int:
         marks = ",".join("?" * len(ids))
         conn.execute(f"DELETE FROM playlists WHERE kind = 'account' AND selected = 0 AND id NOT IN ({marks})", ids)
     conn.commit()
-    return len(found)
+    return source
 
 
 def _print_playlists(conn) -> None:
@@ -137,10 +149,11 @@ def playlists(json_out: bool = typer.Option(False, "--json", help="The list as J
                           "the next sync moves them to .trash (kept 14 days). Preview: runsync sync --dry-run")
         return
     cookies = cfg.cookies if check_cookies(cfg.cookies).usable else None
-    live, problem = False, ""
-    if cookies:
+    api = yt.open_api(cfg, conn)
+    live, problem, source = False, "", "cookies"
+    if cookies or api:
         try:
-            _merge_remote(conn, cookies)
+            source = _merge_remote(conn, cookies, api)
             live = True
         except Exception as exc:  # noqa: BLE001
             logger.warning("playlist refresh failed: %s", exc)
@@ -151,7 +164,9 @@ def playlists(json_out: bool = typer.Option(False, "--json", help="The list as J
 
     rows = conn.execute("SELECT * FROM playlists ORDER BY title").fetchall()
     if json_out:   # facts only; the skill decides how to present them
-        console.print_json(json.dumps({"live": live, "problem": problem, "playlists": list_playlists(conn)}))
+        listed = [{**r, "source": "cookies" if source == "cookies" or r["id"] in fetch.API_UNREADABLE else "api"}
+                  for r in list_playlists(conn)]
+        console.print_json(json.dumps({"live": live, "problem": problem, "source": source, "playlists": listed}))
         return
     if problem:
         console.print("\u26a0\ufe0f [yellow]Could not refresh from YouTube; this is the saved list, not live.[/]")
@@ -391,7 +406,7 @@ def sync(dry_run: bool = typer.Option(False, "--dry-run", help="Show what would 
     try:
         with run_lock(cfg.library) if needs_lock else nullcontext():
             res = run_sync(cfg, conn, cookies, dry_run=dry_run, force_delete=force_delete,
-                           log=logger.info, rep=reporter, probe=probe)
+                           log=logger.info, rep=reporter, probe=probe, api=yt.open_api(cfg, conn))
     except AlreadyRunning as exc:
         console.print(f"[red]{exc}[/]. Wait for it to finish, or stop it (Ctrl-C) and retry.")
         raise typer.Exit(3) from None
@@ -800,6 +815,141 @@ def card(register: str = typer.Option("", "--register", help="Mount path of a ca
         sys.stdout.write(json.dumps({**state, **result}) + "\n")
         return
     _print_card(state)
+
+
+@app.command()
+def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTube in your browser (once)."),
+            cleanup: bool = typer.Option(False, "--cleanup", help="Preview removing repeats and merged duplicates from "
+                                         "your YouTube playlists (nothing changes)."),
+            apply: bool = typer.Option(False, "--apply", help="Run the cleanup (needs --confirm)."),
+            confirm: str = typer.Option("", "--confirm", help="With --apply: the plan id shown by the preview. Only that "
+                                        "exact plan runs; any other is refused."),
+            batch: int = typer.Option(ytclean.DEFAULT_BATCH, "--batch", help="With --apply: most operations per run."),
+            undo: bool = typer.Option(False, "--undo", help="Reverse the last cleanup or add run."),
+            search: str = typer.Option("", "--search", help="Search YouTube for a song (no quota); lists candidates."),
+            replacements: bool = typer.Option(False, "--replacements", help="Search a replacement for each song YouTube "
+                                              "no longer serves (no quota; nothing changes)."),
+            add: str = typer.Option("", "--add", help="Video ids to add (comma separated); needs --to."),
+            to: str = typer.Option("", "--to", help="With --add: your playlist's name or id."),
+            create: bool = typer.Option(False, "--create", help="With --add: make the playlist (private) if it is missing."),
+            json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
+    """Show the YouTube API login, today's quota and your playlists. --login signs in; --cleanup previews the cleanup."""
+    console.stderr = json_out
+    cfg, conn = _ctx()
+    setup_logging(cfg, "youtube")
+    api = yt.Api(cfg.youtube_token, cfg.youtube_client, conn, cfg.youtube_budget)
+    facts: dict = {"client_file": cfg.youtube_client.exists(), "logged_in": api.logged_in(),
+                   "budget": cfg.youtube_budget, "units_today": api.units_today()}
+
+    def fail(message: str, code: int = 2):
+        facts["error"] = message
+        console.print(f"[red]{_esc(message)}[/]")
+        if json_out:
+            sys.stdout.write(json.dumps(facts) + "\n")
+        raise typer.Exit(code)
+
+    try:
+        if login:
+            if not cfg.youtube_client.exists():
+                raise yt.AuthError(f"{cfg.youtube_client.name} is missing: create a Desktop OAuth client in Google Cloud "
+                                   "and save its JSON in the repo folder.")
+            yt.login(cfg.youtube_client, cfg.youtube_token,
+                     announce=lambda m: console.print(f"\U0001f310 {_esc(m)}"))
+            facts["logged_in"] = True
+            console.print("\u2705 Signed in. The login is saved in youtube_token.json (owner-only, git-ignored).")
+        if search:
+            facts["search"] = {"query": search, "candidates": [ytsearch.as_dict(c) for c in ytsearch.candidates(search)]}
+        if replacements:
+            lost, nameless = ytsearch.lost_songs(conn)
+            for song in lost:
+                if song.in_library is None:
+                    song.candidates = ytsearch.candidates(ytsearch.query_for(song.title))
+            facts["replacements"] = {"no_title": nameless, "songs": [
+                {"video_id": s_.video_id, "title": s_.title, "reason": s_.reason, "in_library": s_.in_library,
+                 "candidates": [ytsearch.as_dict(c) for c in s_.candidates]} for s_ in lost]}
+        if (cleanup or apply or undo or add) and not facts["logged_in"]:
+            raise yt.AuthError(f"Not signed in to YouTube. {yt.LOGIN_HINT}")
+        if add and not to:
+            raise ytclean.PlanRefused("--add needs --to <playlist name or id>.")
+        if apply and not (cleanup or add):
+            cleanup = True
+        if add:
+            ids = [v.strip() for v in add.split(",") if v.strip()]
+            with run_lock(cfg.library) if apply else nullcontext():
+                aplan, skipped = ytclean.build_add_plan(api, conn, ids, to, create, ytsearch.video_titles(ids))
+                facts["add"] = {"plan_id": ytclean.plan_id(aplan), "playlist": next(iter(aplan.playlists.values())),
+                                "creates": any(o.kind == "create" for o in aplan.ops), "cost": aplan.cost,
+                                "videos": [{"video_id": o.video_id, "title": o.title} for o in aplan.ops if o.kind == "add"],
+                                "skipped": skipped}
+                if apply:
+                    r = ytclean.apply_plan(api, conn, aplan, confirm, batch)
+                    facts["applied"] = {"added": r.added, "created": r.created, "left": r.left, "stopped": r.stopped,
+                                        "items": _applied_items(r), "verify": ytclean.verify(api, r)}
+                    console.print(f"\u2705 Added {r.added} song(s)" + (", playlist created" if r.created else "")
+                                  + (f" ({_esc(r.stopped)})" if r.stopped else "."))
+            facts["units_today"] = api.units_today()
+        elif cleanup or undo:
+            with run_lock(cfg.library) if (apply or undo) else nullcontext():
+                if undo:
+                    r = ytclean.undo_last_run(api, conn)
+                    facts["undone"] = {"restored": r.restored, "removed": r.removed, "left": r.left, "stopped": r.stopped}
+                    console.print(f"\u21a9\ufe0f Undid the last cleanup: {r.restored} put back, {r.removed} taken out"
+                                  + (f", {r.left} left ({_esc(r.stopped)})" if r.left else "."))
+                else:
+                    plan = ytclean.build_plan(api, conn)
+                    facts["cleanup"] = {**ytclean.summary(plan), "days": ytclean.days_needed(plan, cfg.youtube_budget),
+                                        "batch": batch,
+                                        "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
+                                                   "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id,
+                                                   "keep_title": o.keep_title}
+                                                  for o in plan.ops]}
+                    if apply:
+                        r = ytclean.apply_plan(api, conn, plan, confirm, batch)
+                        facts["applied"] = {"deleted": r.deleted, "added": r.added, "left": r.left, "stopped": r.stopped,
+                                            "items": _applied_items(r), "verify": ytclean.verify(api, r)}
+                        console.print(f"\u2705 Cleaned: {r.deleted} removed, {r.added} added, {r.left} still to do"
+                                      + (f" ({_esc(r.stopped)})" if r.stopped else "."))
+            facts["units_today"] = api.units_today()
+        elif facts["logged_in"]:
+            facts["playlists"] = yt.my_playlists(api)
+            facts["units_today"] = api.units_today()
+    except AlreadyRunning as exc:
+        fail(str(exc), 3)
+    except (ytclean.PlanRefused, ytclean.NoSuchPlaylist) as exc:
+        fail(str(exc))
+    except yt.YouTubeError as exc:
+        fail(str(exc))
+    if json_out:
+        sys.stdout.write(json.dumps(facts) + "\n")
+        return
+    if "add" in facts and "applied" not in facts:
+        a = facts["add"]
+        console.print(f"\u2795 Add plan {a['plan_id']}: {len(a['videos'])} song(s) to {_esc(a['playlist'])}"
+                      f"{' (new)' if a['creates'] else ''}. Apply with: runsync youtube --add ... --to ... --apply --confirm {a['plan_id']}")
+        return
+    if "search" in facts or "replacements" in facts:
+        for c in facts.get("search", {}).get("candidates", []):
+            console.print(f"  {c['video_id']}  {_esc(c['title'])} \u00b7 {_esc(c['channel'])}")
+        for song in facts.get("replacements", {}).get("songs", []):
+            console.print(f"\U0001f3b5 {_esc(song['title'])}" + (" (already in your library)" if song["in_library"] else ""))
+            for c in song["candidates"][:3]:
+                console.print(f"    {c['video_id']}  {_esc(c['title'])} \u00b7 {_esc(c['channel'])}")
+        return
+    if "cleanup" in facts and "applied" not in facts and "undone" not in facts:
+        c = facts["cleanup"]
+        console.print(f"\U0001f9f9 Cleanup plan {c['plan_id']}: {c['deletes']} to remove, {c['adds']} to add "
+                      f"({c['cost']} quota units, {c['days']} day(s)). Apply with: runsync youtube --apply --confirm {c['plan_id']}")
+        return
+    console.print(("\u2705 Signed in" if facts["logged_in"] else "\u26a0\ufe0f Not signed in (run: runsync youtube --login)")
+                  + f" \u00b7 quota today {facts['units_today']} of {facts['budget']}")
+    for p in facts.get("playlists", []):
+        console.print(f"  \U0001f4cb {_esc(p['title'])} \u00b7 {p['count']}")
+
+
+def _applied_items(r) -> list[dict]:
+    """What was really changed, one row per change (the skill shows these)."""
+    return [{"op": o.kind, "why": o.why, "playlist": r.playlists.get(o.playlist_id, o.playlist_id), "video_id": o.video_id,
+             "title": o.title, "keep_id": o.keep_id, "keep_title": o.keep_title} for o in r.ops_done if o.kind != "create"]
 
 
 def _clip(text: str, width: int = 72) -> str:

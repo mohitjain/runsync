@@ -30,7 +30,7 @@ class World:
         self.playlists[pid] = list(ids)
         self.unknown[pid] = list(unknown)
 
-    def _fetch(self, url, cookies):
+    def _fetch(self, url, cookies, api=None):
         val = self.playlists[url]
         if isinstance(val, Exception):
             raise val
@@ -232,4 +232,25 @@ def test_result_dict_has_the_facts_the_skills_present(world):
     assert d["bytes"] > 0 and d["aborted"] is None
     world.add_playlist("Q", ids(2, "q"))
     world.behaviour["q0"] = RuntimeError("boom")
-    assert world.run().to_dict()["failed"] == [{"id": "q0", "reason": "boom"}]
+    d2 = world.run().to_dict()
+    assert d2["failed"] == [{"id": "q0", "title": "Title q0", "reason": "boom"}]       # the title is there to list
+    assert [t["id"] for t in d2["tracks"]] == ["q1"] and d2["tracks"][0]["title"] == "Title q1"
+    assert d["unavailable_tracks"] == [{"id": "t1", "title": "Title t1", "reason": "Video unavailable"}]
+    t0 = d["tracks"][0]
+    assert (t0["id"], t0["title"], t0["codec"], t0["kbps"], t0["quality"]) == ("t0", "Title t0", "mp4a", 258, "high")
+    assert t0["bytes"] > 0 and t0["seconds"] == 0
+
+
+def test_a_merged_duplicate_that_left_the_playlist_is_not_removed_and_not_counted_by_the_guard(world):
+    """YouTube cleanup takes losing uploads out of the playlists; that must not trash them or trip the mass-delete guard."""
+    world.add_playlist("P", ids(10))
+    world.run()
+    world.conn.execute("UPDATE tracks SET status = 'merged', master_path = NULL WHERE video_id IN ('t0', 't1', 't2')")
+    world.conn.commit()
+    world.playlists["P"] = ids(10)[3:]          # the three merged ones are gone from the playlist
+    res = world.run()
+    assert not res.aborted and res.removed == []
+    assert [world.status(v) for v in ("t0", "t1", "t2")] == ["merged"] * 3 and world.status("t5") == "downloaded"
+    world.playlists["P"] = ids(10)[4:]          # a real removal still trashes (only t3 here)
+    res = world.run()
+    assert res.removed == ["t3"] and world.status("t3") == "trashed"

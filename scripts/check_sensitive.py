@@ -22,6 +22,8 @@ NAME_PATTERNS = [
     (r"(^|/)logs/|\.log(\.\d+)?$", "log file"),
     (r"(^|/)\.env(\..*)?$", "environment file"),
     (r"\.(pem|key)$", "private key"),
+    (r"(^|/)client_secret[^/]*\.json$", "Google OAuth client secret"),
+    (r"(^|/)youtube_token[^/]*\.json$", "saved YouTube login token"),
     (r"\.(m4a|flac|opus|webm|mp3|wav|ogg|m3u8|part)$", "audio/music file"),
     (r"(^|/)(master|player|\.trash)/", "music library directory"),
 ]
@@ -32,6 +34,8 @@ CONTENT_PATTERNS = [
     (rb"\.youtube\.com\tTRUE\t", "YouTube cookie line"),
     (rb"-----BEGIN [A-Z ]*PRIVATE KEY-----", "private key"),
     (rb"sk-ant-[A-Za-z0-9_\-]{20,}", "Anthropic API key"),
+    (rb"GOCSPX-[A-Za-z0-9_\-]{20,}", "Google OAuth client secret"),
+    (rb'"refresh_token"\s*:\s*"1//', "Google OAuth refresh token"),
 ]
 
 MAX_READ = 2_000_000

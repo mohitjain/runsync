@@ -21,6 +21,7 @@ class Config:
     near_tie_ratio: float = 0.10  # bitrates within 10% count as a tie -> prefer a natively playable format
     online: bool = True               # False = only offline resolver tiers
     http_cache_days: int = 90
+    youtube_budget: int = 8000        # API quota units we allow ourselves per day (YouTube gives 10,000)
 
     @property
     def master(self) -> Path:
@@ -47,6 +48,14 @@ class Config:
         return self.library / "cache"
 
     @property
+    def youtube_client(self) -> Path:
+        return REPO_ROOT / "client_secret.json"
+
+    @property
+    def youtube_token(self) -> Path:
+        return REPO_ROOT / "youtube_token.json"
+
+    @property
     def review_path(self) -> Path:
         return self.library / "review.csv"
 
@@ -69,7 +78,7 @@ def load_config(library: Path | None = None) -> Config:
         if "cookies" in data:
             cfg.cookies = Path(data["cookies"]).expanduser()
         for key in ("max_downloads_per_run", "pause_seconds", "mass_delete_threshold", "trash_days", "near_tie_ratio",
-                    "online", "http_cache_days"):
+                    "online", "http_cache_days", "youtube_budget"):
             if key in data:
                 setattr(cfg, key, data[key])
     return cfg
