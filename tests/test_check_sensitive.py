@@ -14,7 +14,8 @@ def run(*files, cwd):
 
 @pytest.mark.parametrize("name", ["cookies.txt", "yt-cookies-2026.txt", "state.db", "state.db-wal", "x.sqlite3",
                                   "state.db.bak-pre-v2", ".sync.lock", "logs/last_run.log", ".env", "a.m4a",
-                                  "master/x"])
+                                  "master/x", "client_secret.json", "client_secret_123.apps.googleusercontent.com.json",
+                                  "youtube_token.json"])
 def test_sensitive_names_blocked(tmp_path, name):
     f = tmp_path / name
     f.parent.mkdir(parents=True, exist_ok=True)
@@ -37,6 +38,13 @@ def test_api_key_caught(tmp_path):
     assert run("c.py", cwd=tmp_path).returncode == 1
 
 
+def test_google_oauth_secrets_are_caught_by_content_even_when_renamed(tmp_path):
+    (tmp_path / "notes.json").write_text('{"installed": {"client_secret": "GOCSPX-' + "a" * 28 + '"}}')
+    assert run("notes.json", cwd=tmp_path).returncode == 1
+    (tmp_path / "t.json").write_text('{"refresh_token": "1//' + "b" * 40 + '"}')
+    assert run("t.json", cwd=tmp_path).returncode == 1
+
+
 def test_normal_files_pass(tmp_path):
     (tmp_path / "ok.py").write_text("print('hi')")
     assert run("ok.py", cwd=tmp_path).returncode == 0
@@ -48,7 +56,9 @@ def test_repo_is_clean():
 
 
 @pytest.mark.parametrize("path", ["cookies.txt", "state.db", "state.db-wal", "state.db-shm", "a.sqlite3",
-                                  "state.db.bak-pre-v2", ".sync.lock", "logs/x.log", ".env", "master/a.m4a"])
+                                  "state.db.bak-pre-v2", ".sync.lock", "logs/x.log", ".env", "master/a.m4a",
+                                  "client_secret.json", "client_secret_1-abc.apps.googleusercontent.com.json",
+                                  "youtube_token.json"])
 def test_gitignore_covers(path):
     r = subprocess.run(["git", "check-ignore", "-q", path], cwd=ROOT, check=False)
     assert r.returncode == 0, f"{path} is not git-ignored"

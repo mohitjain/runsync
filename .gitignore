@@ -5,6 +5,8 @@ cookies*.txt
 .env.*
 *.pem
 *.key
+client_secret*.json
+youtube_token*.json
 
 # --- state: SQLite databases, their journals, backups, locks ---
 *.db
