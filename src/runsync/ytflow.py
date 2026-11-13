@@ -9,9 +9,10 @@ import re
 import sqlite3
 from contextlib import nullcontext
 
-from . import snapshot, ytclean, ytsearch
+from . import playlist_select, snapshot, ytclean, ytmirror, ytsearch
 from . import youtube as yt
 from .config import Config
+from .dedupe import winner_of
 from .lock import run_lock
 from .util import now_iso
 
@@ -28,6 +29,11 @@ def video_id(value: str) -> str:
 def base_facts(cfg: Config, api: yt.Api) -> dict:
     return {"client_file": cfg.youtube_client.exists(), "logged_in": api.logged_in(), "budget": cfg.youtube_budget,
             "units_today": api.units_today()}
+
+
+def library_title(conn: sqlite3.Connection) -> str | None:
+    lib = playlist_select.library_playlist(conn)
+    return lib["title"] if lib else None
 
 
 def search(query: str) -> dict:
@@ -66,7 +72,7 @@ def remove(conn: sqlite3.Connection, ids: str) -> list[str]:
     ones still liked for you to unlike by hand; the next sync then moves their files to .trash/ and forgets them."""
     wanted = [video_id(x.strip()) for x in ids.split(",") if x.strip()]
     for v in wanted:
-        conn.execute("INSERT OR REPLACE INTO unwanted (video_id, decided_at) VALUES (?, ?)", (v, now_iso()))
+        conn.execute("INSERT OR REPLACE INTO excluded (video_id, decided_at) VALUES (?, ?)", (v, now_iso()))
     conn.commit()
     return wanted
 
@@ -98,24 +104,93 @@ def add(api: yt.Api, conn: sqlite3.Connection, cfg: Config, ids: list[str], to: 
     return facts
 
 
+def library_facts(conn: sqlite3.Connection) -> dict | None:
+    return playlist_select.library_playlist(conn)
+
+
+def set_library(api: yt.Api, conn: sqlite3.Connection, cfg: Config, name: str, create: bool, apply: bool, confirm: str) -> dict:
+    """Choose the library list: one of your playlists, or (with --create) a new private one made through the usual
+    preview and confirmation. The library list is synced and Liked Music feeds it."""
+    found = ytclean.find_playlist(api, name)
+    if found is not None:
+        if found[0] in ytclean.NEVER_WRITE:
+            raise ytclean.NoSuchPlaylist(f"'{found[1]}' cannot be the library list.")
+        conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES (?, ?, ?, 'account', 1) "
+                     "ON CONFLICT(id) DO UPDATE SET selected = 1",
+                     (found[0], found[1], f"https://www.youtube.com/playlist?list={found[0]}"))
+        playlist_select.set_library(conn, found[0])
+        return {"library": {"id": found[0], "title": found[1]}, "created": False}
+    if not create:
+        raise ytclean.NoSuchPlaylist(f"No playlist called '{name}'. Say to create it, or pick one of your playlists.")
+    plan, _ = ytclean.build_add_plan(api, conn, [], name, create=True)
+    facts: dict = {"library_plan": {"plan_id": ytclean.plan_id(plan), "name": name.strip(), "cost": plan.cost}}
+    if apply:
+        with run_lock(cfg.library):
+            r = ytclean.apply_plan(api, conn, plan, confirm, 1)
+        made = next((pid for pid, t in r.playlists.items() if t == name.strip() and not pid.startswith("new:")), None)
+        if made:
+            playlist_select.set_library(conn, made)
+            facts["library"] = {"id": made, "title": name.strip()}
+            facts["created"] = True
+    return facts
+
+
+def _mirror_inputs(conn: sqlite3.Connection, cfg: Config, library_pid: str | None):
+    """(liked, hook) for build_plan: the hook plans the mirror for the library list, or is None without a library."""
+    if not library_pid:
+        return None, None
+    liked = ytmirror.read_liked(cfg, conn)
+    excluded = {r[0] for r in conn.execute("SELECT video_id FROM excluded")}
+    dead = {r[0] for r in conn.execute("SELECT video_id FROM tracks WHERE status = 'unavailable'")}
+    seen = ytmirror.liked_seen(conn)
+    return liked, lambda pid, entries: ytmirror.plan_mirror(pid, entries, liked, seen, excluded, dead,
+                                                            lambda v: winner_of(conn, v))
+
+
 def cleanup(api: yt.Api, conn: sqlite3.Connection, cfg: Config, apply: bool, confirm: str, batch: int,
             place_in: str = "") -> dict:
     with run_lock(cfg.library) if apply else nullcontext():
+        library = playlist_select.library_playlist(conn)
         target = None
         if place_in:
             found = ytclean.find_playlist(api, place_in)
             if found is None:
                 raise ytclean.NoSuchPlaylist(f"No playlist called '{place_in}' for the replacements.")
             target = found[0]
-        plan = ytclean.build_plan(api, conn, place_in=target)
+        elif library:
+            target = library["id"]
+        liked, hook = _mirror_inputs(conn, cfg, library["id"] if library else None)
+        plan = ytclean.build_plan(api, conn, place_in=target, mirror=hook, library=library["id"] if library else None)
         facts = {"cleanup": {**ytclean.summary(plan), "days": ytclean.days_needed(plan, cfg.youtube_budget), "batch": batch,
+                             "mirror": {"library": library["title"] if library else None,
+                                        "paused": liked.paused if liked else "", "liked": len(liked.ids) if liked else 0},
                              "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
                                         "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id,
                                         "keep_title": o.keep_title} for o in plan.ops]}}
         if apply:
             r = ytclean.apply_plan(api, conn, plan, confirm, batch)
             facts["applied"] = _applied(api, conn, r, deleted=r.deleted, added=r.added)
+            if liked and not liked.paused and facts["applied"]["verify"]["ok"]:
+                ytmirror.record_seen(conn, set(liked.ids), complete=r.left == 0 and not r.stopped)
+                ytmirror.prune_excluded(conn, set(liked.ids))
     return facts
+
+
+def baseline(api: yt.Api, conn: sqlite3.Connection, cfg: Config) -> dict:
+    """First-run choice "only new likes from now on": today's backlog of likes that are not in the library list is put
+    in `excluded` (so it is never added) and today's likes become the snapshot. Local only; writes nothing to YouTube."""
+    library = playlist_select.library_playlist(conn)
+    if not library:
+        raise ytclean.NoSuchPlaylist("Choose the library list first (--library NAME).")
+    liked, hook = _mirror_inputs(conn, cfg, library["id"])
+    if liked.paused:
+        raise ytclean.PlanRefused(f"Cannot set the baseline: {liked.paused}.")
+    entries = yt.playlist_entries(api, library["id"])
+    backlog = [o.video_id for o in hook(library["id"], entries) if o.kind == "add"]
+    for v in backlog:
+        conn.execute("INSERT OR REPLACE INTO excluded (video_id, decided_at) VALUES (?, ?)", (v, now_iso()))
+    ytmirror.record_seen(conn, set(liked.ids), complete=True)
+    return {"baseline": len(backlog)}
 
 
 def undo(api: yt.Api, conn: sqlite3.Connection, cfg: Config) -> dict:

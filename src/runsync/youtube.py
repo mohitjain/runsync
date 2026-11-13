@@ -376,15 +376,6 @@ def add_entry(api: Api, playlist_id: str, video_id: str, position: int | None = 
         return api.request("POST", "playlistItems", {"part": "snippet"}, {"snippet": sn})["id"]
 
 
-def ratings(api: Api, video_ids: list[str]) -> dict[str, str]:
-    """{video id: "like" | "none" | ...} for the signed-in owner (videos.getRating: a read, 1 unit per 50 videos)."""
-    out: dict[str, str] = {}
-    for i in range(0, len(video_ids), 50):
-        d = api.request("GET", "videos/getRating", {"id": ",".join(video_ids[i:i + 50])})
-        out.update({x["videoId"]: x.get("rating", "none") for x in d.get("items", [])})
-    return out
-
-
 def delete_entry(api: Api, item_id: str) -> None:
     api.request("DELETE", "playlistItems", {"id": item_id})
 

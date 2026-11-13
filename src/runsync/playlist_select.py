@@ -44,6 +44,30 @@ def refresh_account_playlists(conn: sqlite3.Connection, cookies: Path | None, ap
     return Refresh(source, gone)
 
 
+def get_setting(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_setting(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                 (key, value))
+    conn.commit()
+
+
+def library_playlist(conn: sqlite3.Connection) -> dict | None:
+    """The library list: the playlist Liked Music is mirrored into and runsync syncs from. {id, title} or None."""
+    pid = get_setting(conn, "library_playlist")
+    row = conn.execute("SELECT id, title FROM playlists WHERE id = ?", (pid,)).fetchone() if pid else None
+    return {"id": row["id"], "title": row["title"]} if row else None
+
+
+def set_library(conn: sqlite3.Connection, playlist_id: str) -> None:
+    """Make a (synced) playlist the library list."""
+    conn.execute("UPDATE playlists SET selected = 1 WHERE id = ?", (playlist_id,))
+    set_setting(conn, "library_playlist", playlist_id)
+
+
 def list_playlists(conn: sqlite3.Connection) -> list[dict]:
     """Numbered (1-based, stable order: title then id), with sync state and track count."""
     rows = conn.execute(

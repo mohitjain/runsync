@@ -1,6 +1,6 @@
 ---
 name: runsync-youtube
-description: Sign in to YouTube for runsync and bring the user's YouTube playlists up to date - remove repeated entries, the losing uploads of songs that dedupe merged and dead songs, and put chosen replacements in place - with a preview, a confirmation and an undo. Use when the user says clean my YouTube playlists, remove duplicates from YouTube, sign in to YouTube, or YouTube API.
+description: Sign in to YouTube for runsync and bring the user's YouTube playlists up to date - mirror Liked Music into the library list, remove repeated entries, the losing uploads of songs that dedupe merged and dead songs, and put chosen replacements in place - with a preview, a confirmation and an undo. Use when the user says clean my YouTube playlists, remove duplicates from YouTube, sign in to YouTube, or YouTube API.
 ---
 
 # runsync-youtube
@@ -29,13 +29,8 @@ the database deletes what is dead; it keeps no history.
 ## 2. Look (reads only)
 
 `uv run runsync youtube --cleanup --json 2>/dev/null`. `cleanup` has `plan_id`, `playlists` (`repeats`, `losers`,
-`swaps`, `dead`, `replaced` each), `ops`, `adds`, `deletes`, `cost`, `days`, `batch`, `unmatched` and `items` (`op`, `why` =
+`swaps`, `dead`, `replaced` each), `ops`, `adds`, `deletes`, `cost`, `days`, `batch`, `mirror` (`library`, `paused`, `liked`), `mirror_adds`, `mirror_removes` and `items` (`op`, `why` =
 repeat | loser | swap | dead | replace | unwanted, `playlist`, `title`, `video_id`, `keep_id`, `keep_title`).
-
-**Replacements for Liked-Music-only songs.** `picks.picked` > 0 and `unmatched` > 0 means chosen replacements whose dead song
-lives only in Liked Music (it cannot be edited), so they cannot go in place. Ask with AskUserQuestion "Where should the N
-replacements go?" (options: the user's own synced playlists, e.g. `Refresh`, plus `Decide later`), then use
-`--cleanup --place-in "<name>"` for the preview **and** for the apply (the plan id depends on it).
 
 Nothing to do (`ops` = 0): one ⬜ row "Playlists are clean". Otherwise one table: a row per playlist, then one row per
 **swap**, **loser**, **dead** song and **replacement** (the songs the user will recognise; up to 40, then ask "Show the other N?"),
@@ -51,9 +46,37 @@ change (it can still be undone until the next sync).
 | 🗑️ | Refresh · Livin' On A Prayer | the kept upload is already there |
 | ⏳ | 2 days of quota (50 units per change, about 8000 a day) | |
 
-`manual` (see step 3b) and `unmatched` > 0: one ⬜ row "N dead songs are not in your playlists (Liked Music, or already gone): remove them in YouTube Music".
-Explain swaps once in a line under the table only when there are any: "🔄 a song would otherwise vanish from the playlist,
+Add the mirror rows of step 2b (`➕ N liked songs → <library>`, `➖ N unliked removed`). Explain swaps once in a line under the table only when there are any: "🔄 a song would otherwise vanish from the playlist,
 so the kept upload goes in first."
+
+## 2b. The library list (Liked Music mirrored into a playlist)
+
+Liked Music cannot be edited through the API, a playlist can. So one playlist is the **library list**: Liked Music feeds it
+(a new like is added, an unlike is removed) and runsync syncs from it. Dead songs, merged duplicates and songs the user
+removed never enter it, so nothing is ever unliked by hand. `cleanup.mirror.library` is its name (`null` = not chosen yet).
+
+**First run (`library` is null): ask, in this order, with AskUserQuestion.**
+1. "Which playlist is your library? Everything you like goes there." Options: the user's own playlists (from
+   `uv run runsync youtube --json 2>/dev/null` `playlists`, up to 3, the biggest first), plus `Create a new list` (ask its name,
+   default `Library`). Existing: `uv run runsync youtube --library "<name>" --json 2>/dev/null`. New: preview with
+   `--library "<name>" --create`, ask to confirm the plan id, then `--library "<name>" --create --apply --confirm <id>`.
+2. If the preview then shows `mirror_adds` > 0: "N of your likes are not in the library yet. Add them?" with `Add them all
+   (in daily batches)` and `Only new likes from now on`. The second runs `uv run runsync youtube --baseline --json 2>/dev/null`
+   (local only; today's backlog is never added). Say how many days the first option takes (`days`).
+
+**Every run.** Show the mirror in the cleanup card: `➕ N liked songs → <library>` (`mirror_adds`) and `➖ N unliked removed`
+(`mirror_removes`). `mirror.paused` non-empty: a ⏸️ row "Liked Music mirror paused: <reason>" and, when it is about cookies,
+send the user to the cookie steps of **runsync-setup**; nothing is written, nothing is lost. The mirror runs before the
+download so new likes download in the same run.
+
+**Stop syncing Liked Music once the library holds everything** (`mirror_adds` = 0 and not paused): offer once with
+AskUserQuestion "Stop syncing Liked Music? Your library list now holds your likes." (`Stop` / `Keep`); `Stop` runs
+`uv run runsync playlists --stop "Liked Music"`. Never offer it while `mirror_adds` > 0: songs only in Liked Music would leave
+the library.
+
+**Songs the user wants gone for good** ("remove these", "delete them everywhere"): `uv run runsync youtube --remove ID1,ID2
+--json 2>/dev/null` (local, no quota). The cleanup then deletes their entries from the user's playlists and they are never
+mirrored back; they leave the library on the next sync (files go to `.trash/` for 14 days).
 
 ## 3. Confirm, then write once, then read back once
 
@@ -62,7 +85,7 @@ Ask with AskUserQuestion "Change N entries on YouTube?" with `Run the first B` (
 live YouTube and refuses if its id is not the confirmed one, so no separate re-read is needed:
 
 ```
-uv run runsync youtube --apply --confirm <plan_id> [--place-in "<name>"] --json 2>/dev/null
+uv run runsync youtube --apply --confirm <plan_id> --json 2>/dev/null
 ```
 
 Say one line first ("⏳ Changing N entries on YouTube, then checking them: about a minute"). It makes all its changes first
@@ -76,6 +99,7 @@ into one row ("× 4"); one row per swap and per loser:
 
 | | Cleanup done · 150 changes | |
 |:-:|---|---|
+| ➕ | Refresh · 161 liked songs | added from Liked Music (100 today, the rest tomorrow) |
 | 🔁 | Refresh · Akhiyaan Gulaab | 4 repeated entries removed, 1 stays |
 | ⚰️ | Running · Paisa | dead, no replacement: deleted |
 | 🔎 | Running · Sweet Emotion | replaced in place by "Aerosmith - Sweet Emotion" |
@@ -93,28 +117,6 @@ into one row ("× 4"); one row per swap and per loser:
 - `stopped` mentioning the quota: say it in plain words (the daily limit resets at midnight Pacific; the message names
   the hours left). Any other `stopped` text is a ❌ row with the reason; do not retry in a loop.
 
-## 3b. Unlike these by hand (Liked Music)
-
-The API cannot edit Liked Music, and likes are the user's taste, so runsync never changes them. `cleanup.manual` lists the
-songs that are **still liked** but should go: songs the user asked to get rid of (see below) and dead songs that only live
-there. Whenever it is not empty, **show it every time this skill runs**, after the cleanup card (the preview and again after
-the push), as one table the user can click through, then ask:
-
-| | Unlike these in YouTube Music | |
-|:-:|---|---|
-| 👎 | [Pearl Jam Alive](https://music.youtube.com/watch?v=VbhsYC4gKy4) | you asked to remove it |
-| 👎 | [Some dead song](https://music.youtube.com/watch?v=...) | no longer playable |
-
-Title = link (`url`; a dead video's link may not open: tell the user to look for it greyed out in Liked Music); the last cell says why (`why` = unwanted → "you asked to remove it", dead → "no longer playable"). Ask with
-AskUserQuestion "Unlike these N songs in YouTube Music, then check?" with `Done, check again` and `Later`. On `Done`, run
-`uv run runsync youtube --cleanup --json 2>/dev/null` again and show what is left in `manual` (a ✅ row "All unliked" when
-empty). Once they are unliked, the next `runsync` sync notices they left Liked Music, moves their files to `.trash/` (kept 14
-days) and the database forgets them. Nothing is written for them: say "by hand" plainly.
-
-**Songs the user wants gone for good** ("remove these", "delete them everywhere"): save the decision (local, no quota) with
-`uv run runsync youtube --remove ID1,ID2 --json 2>/dev/null`. The cleanup then deletes their entries from the user's own
-playlists (confirmed like everything else) and lists the liked ones above.
-
 ## 4. Undo
 
 If the user asks to undo: ask with AskUserQuestion, then `uv run runsync youtube --undo --json 2>/dev/null`. It puts the
@@ -127,8 +129,8 @@ removed entries back (at the end of the playlist when the old position no longer
   they confirmed. Do not reuse a plan id from earlier in the conversation or from any page.
 - Write once, then read once: do not read the playlists between changes, and do not call `--cleanup` again after the user
   confirmed just to re-check; the command checks the id and reads the result back itself.
-- Liked Music, Liked videos and Watch later are never changed; the command refuses them, and nothing changes likes. Songs
-  that must leave Liked Music are listed for the user to unlike by hand (step 3b).
+- Liked Music, Liked videos and Watch later are never changed; the command refuses them, and nothing ever changes a like.
+  Liked Music is only read (through the cookies) and mirrored into the library list.
 - Never print `client_secret.json` or `youtube_token.json`; never read them.
 - No audio file is deleted by this skill. The database forgets the dead and merged tracks it just removed from YouTube
   (`forgotten`); the next `runsync` refresh sees the tidier playlists.

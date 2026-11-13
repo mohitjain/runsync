@@ -366,12 +366,11 @@ def test_build_plan_reads_dead_songs_and_picks_from_the_database(conn, monkeypat
                  "('d1', 'UP1', 'Found one', 'picked', 'now'), ('d2', NULL, NULL, 'skipped', 'now')")
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 3}])
     monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(("d1", True), ("d2", True), ("ok", True)))
-    monkeypatch.setattr(yt, "ratings", lambda api, ids: {})
     plan = ytclean.build_plan(object(), conn)
     assert keys(plan.ops) == [("add", "UP1", "replace"), ("delete", "d1", "replace"), ("delete", "d2", "dead")]
     assert plan.ops[0].title == "Found one"
     s = ytclean.summary(plan)
-    assert s["playlists"][0]["dead"] == 1 and s["playlists"][0]["replaced"] == 1 and s["unmatched"] == 1   # d3 is in no playlist
+    assert s["playlists"][0]["dead"] == 1 and s["playlists"][0]["replaced"] == 1
 
 
 def test_verify_checks_that_a_replacement_is_present_and_the_dead_entry_is_gone(monkeypatch):
@@ -453,36 +452,8 @@ def test_an_unwanted_song_is_deleted_from_every_playlist_entry():
     assert [(o.kind, o.video_id, o.why) for o in ops] == [("delete", "bad", "unwanted"), ("delete", "bad", "repeat")]
 
 
-def _unwanted_world(conn, monkeypatch, liked):
-    conn.execute("INSERT INTO playlists (id, title, url, selected) VALUES ('PL1', 'Running', 'u', 1)")
-    conn.execute("INSERT INTO tracks (video_id, title, status) VALUES ('bad', 'Bad Song', 'downloaded'), "
-                 "('gone2', 'Only liked', 'downloaded'), ('dead3', 'Dead and liked', 'unavailable'), "
-                 "('dead4', 'Dead, not liked', 'unavailable')")
-    conn.execute("INSERT INTO unwanted (video_id, decided_at) VALUES ('bad', 'x'), ('gone2', 'x')")
-    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 2}])
-    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(("ok", True), ("bad", True)))
-    monkeypatch.setattr(yt, "ratings", lambda api, ids: {v: ("like" if v in liked else "none") for v in ids})
-
-
-def test_what_is_still_liked_is_listed_for_the_owner_to_unlike_by_hand(conn, monkeypatch):
-    _unwanted_world(conn, monkeypatch, liked={"bad", "gone2", "dead3"})
-    plan = ytclean.build_plan(object(), conn)
-    assert keys(plan.ops) == [("delete", "bad", "unwanted")]          # the playlist entry goes; likes are never written
-    assert [(m["video_id"], m["why"], m["title"]) for m in plan.manual] == [
-        ("bad", "unwanted", "Bad Song"), ("dead3", "dead", "Dead and liked"), ("gone2", "unwanted", "Only liked")]
-    assert plan.manual[0]["url"] == "https://music.youtube.com/watch?v=bad"
-    assert ytclean.summary(plan)["manual"] == plan.manual
-
-
-def test_nothing_is_listed_once_the_owner_has_unliked_them(conn, monkeypatch):
-    _unwanted_world(conn, monkeypatch, liked=set())
-    assert ytclean.build_plan(object(), conn).manual == []
-
-
-def test_the_plan_never_writes_to_likes_or_asks_for_a_rating_change(conn, monkeypatch):
-    _unwanted_world(conn, monkeypatch, liked={"bad", "gone2", "dead3"})
-    assert not hasattr(yt, "rate")                                     # there is no function that could change a like
-    assert all(o.kind in ("add", "delete", "create") for o in ytclean.build_plan(object(), conn).ops)
+def test_nothing_can_change_a_like():
+    assert not hasattr(yt, "rate") and not hasattr(yt, "ratings")       # there is no function that could touch a like
 
 
 def test_the_remove_command_saves_the_wish_locally_and_only_for_real_ids(cli_env):
@@ -491,7 +462,7 @@ def test_the_remove_command_saves_the_wish_locally_and_only_for_real_ids(cli_env
     cli, calls = cli_env
     out = json.loads(_run(cli, "--remove", "abcdefghijk,ZZZZZZZZZZZ", "--json").stdout)
     assert out["wanted_gone"] == ["abcdefghijk", "ZZZZZZZZZZZ"] and calls == []
-    assert db.connect(load_config().db_path).execute("SELECT COUNT(*) FROM unwanted").fetchone()[0] == 2
+    assert db.connect(load_config().db_path).execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 2
     bad = _run(cli, "--remove", "nope", "--json")
     assert bad.exit_code == 2 and "not a YouTube video id" in json.loads(bad.stdout)["error"]
 
@@ -499,9 +470,9 @@ def test_the_remove_command_saves_the_wish_locally_and_only_for_real_ids(cli_env
 def test_the_track_is_forgotten_together_with_the_wish(conn):
     from runsync import snapshot
     conn.execute("INSERT INTO tracks (video_id, status) VALUES ('bad', 'trashed')")
-    conn.execute("INSERT INTO unwanted (video_id, decided_at) VALUES ('bad', 'x')")
+    conn.execute("INSERT INTO excluded (video_id, decided_at) VALUES ('bad', 'x')")
     snapshot.purge_track(conn, "bad")
-    assert conn.execute("SELECT COUNT(*) FROM unwanted").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 0
 
 
 # ---- replacements whose dead song lives only in Liked Music ---------------------------------------------------------------
@@ -516,18 +487,15 @@ def _picks_world(conn, monkeypatch, in_refresh=()):
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1},
                                                           {"id": "PL2", "title": "Refresh", "count": 1}])
     monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(*[(v, True) for v in (("ok",) if pid == "PL1" else ("ok2", *in_refresh))]))
-    monkeypatch.setattr(yt, "ratings", lambda api, ids: {v: "like" for v in ids})
 
 
 def test_replacements_for_songs_that_live_only_in_liked_music_go_where_the_owner_chose(conn, monkeypatch):
     _picks_world(conn, monkeypatch)
     without = ytclean.build_plan(object(), conn)
-    assert without.ops == [] and without.unmatched == 2                      # nowhere to put them yet
+    assert without.ops == []                                                  # nowhere to put them yet
     plan = ytclean.build_plan(object(), conn, place_in="PL2")
     assert [(o.kind, o.playlist_id, o.video_id, o.why, o.title) for o in plan.ops] == [
         ("add", "PL2", "UPLOAD00001", "replace", "Found one"), ("add", "PL2", "UPLOAD00002", "replace", "Found two")]
-    assert plan.unmatched == 0
-    assert {m["video_id"] for m in plan.manual} == {"lost1", "lost2"}       # the dead originals are for you to unlike by hand
 
 
 def test_a_replacement_already_in_the_playlist_is_not_added_again(conn, monkeypatch):

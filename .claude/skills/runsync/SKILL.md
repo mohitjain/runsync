@@ -86,6 +86,20 @@ Card (one row per fact; the ▲ ▼ rows only when something changed):
 | 📋 | 3 of 5 syncing: Liked Music, Refresh, Running · read through the YouTube API |
 | ▲ | Started: Gym Mix |
 
+## 2b. Library list and YouTube
+
+Before downloading, run the **runsync-youtube** skill (steps 1, 2, 2b and 3) so Liked Music is mirrored into the library list
+first and new likes download in this run: its first-run questions (which playlist is the library, catch up on all likes or only
+new ones), then the preview and the confirmation. Not signed in to YouTube: one ⬜ row "Not signed in (optional)" and carry on.
+
+Card:
+
+| | Library |
+|:-:|---|
+| 📚 | Library list: Refresh (213 songs) |
+| ➕ | 161 liked songs added (2 days of quota; 100 today) |
+| ➖ | 2 unliked songs removed |
+
 ## 3. Download
 
 `uv run runsync sync --dry-run --json 2>/dev/null`, then say in one card what is waiting (`queue_total`, how many this
@@ -164,32 +178,23 @@ Card:
 
 (nothing found: a single ⬜ row "No duplicates")
 
-## 7. YouTube playlists
+## 7. YouTube playlists again
 
-Optional and quick. `uv run runsync youtube --json 2>/dev/null`: not signed in (or no client file): one ⬜ row "Not signed
-in to YouTube (optional)" and move on, never ask here. Signed in: `uv run runsync youtube --cleanup --json 2>/dev/null`;
-`cleanup.ops` > 0: run the **runsync-youtube** skill (preview, confirm, apply, check); 0: a ⬜ row "Playlists are clean".
-The plan covers repeats, duplicates, dead songs and chosen replacements; the database forgets each one after the check.
-If `cleanup.manual` is not empty, the skill lists those songs for the user to unlike by hand (Liked Music cannot be changed
-through the API) and asks "Done, check again" / "Later"; add a ⚠️ row "N to unlike by hand" to the YouTube card.
-
-If `youtube --json` shows `picks.picked` > 0 (replacement choices saved earlier, not pushed yet) the cleanup plan already
-contains them. Otherwise, if the Download step found unavailable songs with a title on record, offer once with
-AskUserQuestion "Search replacements for N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill (its picks
-and every dead song then go through the same cleanup).
-
-Card: the detail table of the sub-skill (every song removed, swapped or added, from `applied.items`), then the live check
-from `applied.verify` ("Checked on YouTube: N of N changes confirmed", before → after counts per playlist). Never show a
-✅ for a change the read-back did not confirm.
+Only after duplicates were removed: run `uv run runsync youtube --cleanup --json 2>/dev/null`; `cleanup.ops` > 0 runs the
+**runsync-youtube** skill (merged duplicates leave the playlists); 0 is a ⬜ row "Playlists are clean". Card: the detail table
+(every song removed, swapped, added or replaced from `applied.items`) and the live check from `applied.verify` ("Checked on
+YouTube: N of N changes confirmed", before → after counts). Never show a ✅ for a change the read-back did not confirm.
 
 | | YouTube · 21 changes | |
 |:-:|---|---|
 | 🔁 | Refresh · Akhiyaan Gulaab | 4 repeated entries removed, 1 stays |
 | 🔄 | Refresh · Suit Full Video Song | replaced by "Suit (Audio)" |
+| 🔎 | Refresh · Sweet Emotion | dead entry replaced by "Aerosmith - Sweet Emotion" |
 | ✅ | Checked on YouTube | 21 of 21 changes confirmed |
 | ✅ | Refresh | 294 → 273 songs |
-| 🔎 | Running · Sweet Emotion | replaced in place by "Aerosmith - Sweet Emotion" |
-| ⚰️ | Refresh · Paisa | dead, no replacement: removed |
+
+If the Download step found unavailable songs with a title on record, offer once with AskUserQuestion "Search replacements for
+N lost songs?" (`Yes` / `Later`); yes runs the **runsync-replace** skill (its picks go into the library list).
 
 ## 8. Card
 
@@ -213,7 +218,7 @@ One table, one row per step with its headline number, built from the cards:
 | | runsync |
 |:-:|---|
 | ✅ | Set up |
-| ✅ | Playlists · 3 syncing |
+| ✅ | Playlists · 3 syncing · library: Refresh |
 | ✅ | Downloaded 50 new |
 | ✅ | Tagged 50 · 48 player copies |
 | ✅ | 3 duplicates removed |

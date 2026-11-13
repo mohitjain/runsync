@@ -50,8 +50,6 @@ class Plan:
     ops: list[Op] = field(default_factory=list)       # adds first, then deletes: any prefix is safe to run
     playlists: dict[str, str] = field(default_factory=dict)
     counts: dict[str, int] = field(default_factory=dict)  # entries each playlist had when the plan was made
-    unmatched: int = 0     # dead or replaced songs found in none of your playlists (Liked Music, or already gone)
-    manual: list[dict] = field(default_factory=list)   # still liked: the owner unlikes these by hand (video_id, title, why, url)
 
     @property
     def adds(self) -> int:
@@ -115,9 +113,11 @@ def plan_playlist(pid: str, entries: list[yt.Entry], winner: Callable[[str], str
     return adds + deletes
 
 
-def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None, place_in: str | None = None) -> Plan:
+def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None, place_in: str | None = None,
+               mirror: Callable[[str, list[yt.Entry]], list[Op]] | None = None, library: str | None = None) -> Plan:
     """Read your owned, selected playlists live and work out what to clean. Writes nothing. `place_in` is a playlist id:
-    replacements whose dead song is in none of your playlists (it lives in Liked Music) are added there."""
+    replacements whose dead song is in none of your playlists (it lives in Liked Music) are added there. `mirror(pid,
+    entries)` returns the operations that keep the library list (`library`) matching Liked Music."""
     owned = {p["id"]: p["title"] for p in yt.my_playlists(api)}
     selected = {r["id"] for r in conn.execute("SELECT id FROM playlists WHERE selected = 1")}
     plan = Plan()
@@ -127,7 +127,7 @@ def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = No
     titles.update({r["pick_id"]: r["title"] or "" for r in conn.execute(
         "SELECT pick_id, title FROM replacement_picks WHERE pick_id IS NOT NULL")})
     dead = {r["video_id"] for r in conn.execute("SELECT video_id FROM tracks WHERE status = 'unavailable'")} - set(picks)
-    unwanted = {r["video_id"] for r in conn.execute("SELECT video_id FROM unwanted")}
+    unwanted = {r["video_id"] for r in conn.execute("SELECT video_id FROM excluded")}
     present: dict[str, set[str]] = {}
     for pid, title in owned.items():
         if pid in NEVER_WRITE or pid not in selected or (only is not None and pid not in only):
@@ -137,17 +137,24 @@ def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = No
         plan.counts[pid] = len(live)
         present[pid] = {e.video_id for e in live}
         plan.ops += plan_playlist(pid, live, lambda v: winner_of(conn, v), lambda v: titles.get(v, ""), picks, dead, unwanted)
-    placed = _place_replacements(plan, picks, titles, present, place_in)
+        if mirror and pid == library:
+            plan.ops += mirror(pid, live)
+    _place_replacements(plan, picks, titles, present, place_in)
+    plan.ops = _without_repeats(plan.ops)
     plan.ops.sort(key=lambda o: o.kind != "add")           # every add before any delete; sort is stable
-    handled = {o.video_id for o in plan.ops if o.kind == "delete" and o.why in ("dead", "replace")}
-    unmatched = (dead | set(picks)) - handled - placed
-    plan.unmatched = len(unmatched)
-    # Liked Music cannot be edited through the API: what is still liked there is for the owner to unlike by hand
-    check = sorted(unwanted | unmatched | placed)
-    liked = yt.ratings(api, check) if check else {}
-    plan.manual = [{"video_id": v, "title": titles.get(v) or "(unavailable video: grey in Liked Music)", "why": "unwanted" if v in unwanted else "dead",
-                    "url": f"https://music.youtube.com/watch?v={v}"} for v in check if liked.get(v) == "like"]
     return plan
+
+
+def _without_repeats(ops: list[Op]) -> list[Op]:
+    """The same entry may be wanted gone for two reasons (repeat and unliked): delete it once."""
+    seen: set[tuple] = set()
+    out = []
+    for o in ops:
+        key = (o.kind, o.playlist_id, o.item_id or o.video_id)
+        if key not in seen:
+            seen.add(key)
+            out.append(o)
+    return out
 
 
 def _place_replacements(plan: Plan, picks: dict[str, str], titles: dict[str, str], present: dict[str, set[str]],
@@ -220,8 +227,8 @@ def summary(plan: Plan) -> dict:
                     "dead": sum(o.why == "dead" for o in mine), "unwanted": sum(o.why == "unwanted" and o.kind == "delete" for o in mine),
                     "replaced": sum(o.why == "replace" and o.kind == "delete" for o in mine)}
     return {"plan_id": plan_id(plan), "playlists": list(per.values()), "ops": len(plan.ops), "adds": plan.adds,
-            "deletes": plan.deletes, "cost": plan.cost, "unmatched": plan.unmatched,
-            "manual": plan.manual}
+            "deletes": plan.deletes, "cost": plan.cost,
+            "mirror_adds": sum(o.why == "mirror" for o in plan.ops), "mirror_removes": sum(o.why == "unliked" for o in plan.ops)}
 
 
 def days_needed(plan: Plan, budget: int) -> int:

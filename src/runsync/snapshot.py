@@ -18,7 +18,7 @@ def purge_track(conn: sqlite3.Connection, video_id: str) -> None:
     for sql in ("DELETE FROM metadata WHERE video_id = ?",
                 "DELETE FROM overrides WHERE kind = 'track' AND key = ?", "DELETE FROM fingerprints WHERE video_id = ?",
                 "DELETE FROM aliases WHERE video_id = ?", "DELETE FROM replacement_picks WHERE lost_id = ?",
-                "DELETE FROM unwanted WHERE video_id = ?",
+                "DELETE FROM excluded WHERE video_id = ?",
                 "DELETE FROM playlist_items WHERE video_id = ?", "DELETE FROM tracks WHERE video_id = ?"):
         conn.execute(sql, (video_id,))
     conn.execute("DELETE FROM dedupe_decisions WHERE a = ? OR b = ?", (video_id, video_id))

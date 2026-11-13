@@ -275,6 +275,11 @@ MIGRATIONS = [
         decided_at TEXT NOT NULL
     );
     """,
+    """
+    ALTER TABLE unwanted RENAME TO excluded;   -- songs that must never be in the library (removed while still liked)
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- preferences, e.g. library_playlist
+    CREATE TABLE liked_seen (video_id TEXT PRIMARY KEY);                 -- Liked Music as of the last mirror
+    """,
 ]
 
 

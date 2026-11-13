@@ -471,10 +471,21 @@ def _say_youtube(facts: dict) -> None:
         c = facts["cleanup"]
         _say(f"🧹 Plan {c['plan_id']}: {c['deletes']} to remove, {c['adds']} to add ({c['cost']} quota units, {c['days']} day(s)). "
              f"Apply: runsync youtube --apply --confirm {c['plan_id']}")
-        if c["manual"]:
-            _say("👎 Unlike these by hand in YouTube Music (the API cannot edit Liked Music):")
-            for m in c["manual"]:
-                _say(f"   {_esc(m['title'] or m['video_id'])}  {m['url']}")
+        m = c["mirror"]
+        if m["library"] is None:
+            _say("📚 No library list yet: choose one with `runsync youtube --library NAME`.")
+        elif m["paused"]:
+            _say(f"⏸️ Liked Music mirror paused: {_esc(m['paused'])}")
+        else:
+            _say(f"📚 {_esc(m['library'])}: {c['mirror_adds']} liked song(s) to add, {c['mirror_removes']} unliked to remove.")
+    elif "library_plan" in facts:
+        p = facts["library_plan"]
+        _say(f"📚 Create the private library list '{_esc(p['name'])}': plan {p['plan_id']}. "
+             f"Apply: runsync youtube --library \"{_esc(p['name'])}\" --create --apply --confirm {p['plan_id']}")
+    elif "library" in facts:
+        _say(f"📚 Library list: {_esc(facts['library']['title'])}")
+    elif "baseline" in facts:
+        _say(f"📌 Baseline set: {facts['baseline']} existing likes will not be added; only new likes flow in.")
     elif "add" in facts:
         a = facts["add"]
         _say(f"➕ Plan {a['plan_id']}: {len(a['videos'])} song(s) to {_esc(a['playlist'])}{' (new)' if a['creates'] else ''}. "
@@ -485,7 +496,8 @@ def _say_youtube(facts: dict) -> None:
         _say(f"🎵 {_esc(song['title'])}" + (" (already in your library)" if song["in_library"] else ""))
         for c in song["candidates"][:3]:
             _say(f"    {c['video_id']}  {_esc(c['title'])} · {_esc(c['channel'])}")
-    if not any(k in facts for k in ("applied", "undone", "cleanup", "add", "search", "replacements")):
+    if not any(k in facts for k in ("applied", "undone", "cleanup", "add", "search", "replacements", "library", "library_plan",
+                                     "baseline")):
         _say(("✅ Signed in" if facts["logged_in"] else "⚠️ Not signed in (run: runsync youtube --login)")
              + f" · quota today {facts['units_today']} of {facts['budget']}")
         for p in facts.get("playlists", []):
@@ -512,6 +524,10 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                                        "--cleanup then removes them from your playlists and lists the liked ones for you to unlike."),
             place_in: str = typer.Option("", "--place-in", help="With --cleanup: put replacements for songs that live only "
                                          "in Liked Music into this playlist (name or id)."),
+            library: str = typer.Option("", "--library", help="Choose the library list (a playlist name): Liked Music is mirrored "
+                                        "into it and runsync syncs from it. With --create it is made if missing."),
+            baseline: bool = typer.Option(False, "--baseline", help="First run: mirror only NEW likes from now on (today's "
+                                          "backlog is not added). Local only."),
             add: str = typer.Option("", "--add", help="Video ids to add (comma separated); needs --to."),
             to: str = typer.Option("", "--to", help="With --add: your playlist's name or id."),
             create: bool = typer.Option(False, "--create", help="With --add: make the playlist (private) if it is missing."),
@@ -538,10 +554,18 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
             facts["saved"] = ytflow.save_picks(conn, pick, skip)
         if remove:
             facts["wanted_gone"] = ytflow.remove(conn, remove)
+        if (library or baseline) and not api.logged_in():
+            raise yt.AuthError(f"Not signed in to YouTube. {yt.LOGIN_HINT}")
+        if library:
+            facts |= ytflow.set_library(api, conn, cfg, library, create, apply, confirm)
+        if baseline:
+            facts |= ytflow.baseline(api, conn, cfg)
+        facts["library_list"] = ytflow.library_title(conn)
         facts["picks"] = ytsearch.pick_counts(conn)
-        facts |= ytflow.act(api, conn, cfg, cleanup_=cleanup, apply=apply, confirm=confirm, batch=batch, undo_=undo,
-                            add_=add, to=to, create=create,
-                            status=not (search or replacements or pick or skip or remove or login), place_in=place_in)
+        if not (library or baseline):
+            facts |= ytflow.act(api, conn, cfg, cleanup_=cleanup, apply=apply, confirm=confirm, batch=batch, undo_=undo,
+                                add_=add, to=to, create=create, place_in=place_in,
+                                status=not (search or replacements or pick or skip or remove or login))
     except AlreadyRunning as exc:
         _fail(str(exc), 3, facts, json_out)
     except (ytclean.PlanRefused, ytclean.NoSuchPlaylist, yt.YouTubeError) as exc:
