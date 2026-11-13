@@ -80,7 +80,7 @@ def remove(conn: sqlite3.Connection, ids: str) -> list[str]:
 def _items(r: ytclean.Applied) -> list[dict]:
     """What was really changed, one row per change (the skills list these)."""
     return [{"op": o.kind, "why": o.why, "playlist": r.playlists.get(o.playlist_id, o.playlist_id), "video_id": o.video_id,
-             "title": o.title, "keep_id": o.keep_id, "keep_title": o.keep_title} for o in r.ops_done if o.kind != "create"]
+             "title": o.title, "keep_id": o.keep_id, "keep_title": o.keep_title, "note": o.note} for o in r.ops_done if o.kind != "create"]
 
 
 def _applied(api: yt.Api, conn: sqlite3.Connection, r: ytclean.Applied, **counts) -> dict:
@@ -166,7 +166,7 @@ def cleanup(api: yt.Api, conn: sqlite3.Connection, cfg: Config, apply: bool, con
                                         "paused": liked.paused if liked else "", "liked": len(liked.ids) if liked else 0},
                              "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
                                         "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id,
-                                        "keep_title": o.keep_title} for o in plan.ops]}}
+                                        "keep_title": o.keep_title, "note": o.note} for o in plan.ops]}}
         if apply:
             r = ytclean.apply_plan(api, conn, plan, confirm, batch)
             facts["applied"] = _applied(api, conn, r, deleted=r.deleted, added=r.added)

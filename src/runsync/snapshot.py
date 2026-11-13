@@ -22,6 +22,7 @@ def purge_track(conn: sqlite3.Connection, video_id: str) -> None:
                 "DELETE FROM playlist_items WHERE video_id = ?", "DELETE FROM tracks WHERE video_id = ?"):
         conn.execute(sql, (video_id,))
     conn.execute("DELETE FROM dedupe_decisions WHERE a = ? OR b = ?", (video_id, video_id))
+    conn.execute("DELETE FROM upgrades WHERE old_id = ? OR new_id = ?", (video_id, video_id))
 
 
 def purge_gone(conn: sqlite3.Connection, present: set[str] | None = None, candidates: set[str] | None = None) -> int:
@@ -73,6 +74,10 @@ def settle_push(conn: sqlite3.Connection, applied, ok: bool) -> dict:
     if not ok or not applied.ops_done:
         return {"purged": 0}
     refresh_playlists(conn, applied.live)
+    for o in applied.ops_done:       # an upgrade that is now on YouTube is no longer waiting
+        if o.why == "upgrade":
+            conn.execute("DELETE FROM upgrades WHERE new_id = ?", (o.video_id,))
+    conn.commit()
     removed = {o.video_id for o in applied.ops_done if o.kind == "delete" and o.why in ("dead", "replace", "loser", "swap")}
     return {"purged": purge_gone(conn, candidates=removed)}
 

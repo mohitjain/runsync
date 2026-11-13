@@ -22,6 +22,8 @@ class Config:
     online: bool = True               # False = only offline resolver tiers
     http_cache_days: int = 90
     youtube_budget: int = 8000        # API quota units we allow ourselves per day (YouTube gives 10,000)
+    quality_recheck_days: int = 30    # look again for a better upload of a song this long after the last search
+    quality_songs_per_run: int = 5    # songs searched per run: each needs format lookups with your cookies, so keep it gentle
 
     @property
     def master(self) -> Path:
@@ -78,7 +80,7 @@ def load_config(library: Path | None = None) -> Config:
         if "cookies" in data:
             cfg.cookies = Path(data["cookies"]).expanduser()
         for key in ("max_downloads_per_run", "pause_seconds", "mass_delete_threshold", "trash_days", "near_tie_ratio",
-                    "online", "http_cache_days", "youtube_budget"):
+                    "online", "http_cache_days", "youtube_budget", "quality_recheck_days", "quality_songs_per_run"):
             if key in data:
                 setattr(cfg, key, data[key])
     return cfg

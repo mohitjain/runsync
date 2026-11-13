@@ -30,6 +30,7 @@ log = logging.getLogger("runsync.dedupe")
 # Live and remastered uploads count as the same song as their studio version (the owner's rule), so these two
 # markers are ignored when deciding who is a candidate, and such pairs merge without a fingerprint check.
 IGNORED_MARKERS = frozenset({"live", "remaster"})
+TOP_KBPS = 250        # at or above this is the Premium ~258 kbps tier (the best YouTube offers)
 SAME_AT = 0.85        # fingerprint similarity at or above this: the same recording
 MAX_OFFSET = 700      # fingerprint steps (~0.124 s each): up to ~87 s of intro/outro
 MIN_OVERLAP = 300     # ~37 s of audio must overlap for a similarity to count
@@ -56,10 +57,15 @@ class Member:
     def label(self) -> str:
         return f"{self.artist} - {self.title}"
 
+    @property
+    def is_top_bitrate(self) -> bool:
+        return (self.kbps or 0) >= TOP_KBPS
+
     def rank(self) -> tuple:
-        # a copy the player can use today (AAC) first, then the studio version over a live one, then source
-        # quality, then bitrate
-        return (self.codec == "aac", not self.is_live, self.tier, self.kbps or 0)
+        # a copy the player can use today (AAC) first, then the studio version over a live one, then the top
+        # bitrate tier (audio quality beats channel type: a 258 kbps lyric video beats a 128 kbps official video),
+        # then source quality, then bitrate
+        return (self.codec == "aac", not self.is_live, self.is_top_bitrate, self.tier, self.kbps or 0)
 
 
 @dataclass
