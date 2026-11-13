@@ -11,6 +11,7 @@ import sqlite3
 from pathlib import Path
 
 from . import youtube as yt
+from .util import now_iso
 
 
 def purge_track(conn: sqlite3.Connection, video_id: str) -> None:
@@ -18,7 +19,6 @@ def purge_track(conn: sqlite3.Connection, video_id: str) -> None:
     for sql in ("DELETE FROM metadata WHERE video_id = ?",
                 "DELETE FROM overrides WHERE kind = 'track' AND key = ?", "DELETE FROM fingerprints WHERE video_id = ?",
                 "DELETE FROM aliases WHERE video_id = ?", "DELETE FROM replacement_picks WHERE lost_id = ?",
-                "DELETE FROM excluded WHERE video_id = ?",
                 "DELETE FROM playlist_items WHERE video_id = ?", "DELETE FROM tracks WHERE video_id = ?"):
         conn.execute(sql, (video_id,))
     conn.execute("DELETE FROM dedupe_decisions WHERE a = ? OR b = ?", (video_id, video_id))
@@ -31,7 +31,11 @@ def purge_gone(conn: sqlite3.Connection, present: set[str] | None = None, candid
         present = {r["video_id"] for r in conn.execute("SELECT DISTINCT video_id FROM playlist_items")}
     rows = conn.execute("SELECT video_id FROM tracks WHERE status IN ('merged', 'unavailable') AND master_path IS NULL").fetchall()
     gone = [r["video_id"] for r in rows if r["video_id"] not in present and (candidates is None or r["video_id"] in candidates)]
+    liked = {r[0] for r in conn.execute("SELECT video_id FROM liked_seen")} \
+        or {r[0] for r in conn.execute("SELECT video_id FROM playlist_items WHERE playlist_id = 'LM'")}
     for v in gone:
+        if v in liked:      # a dropped duplicate or dead song that is still liked must never be mirrored back
+            conn.execute("INSERT OR IGNORE INTO excluded (video_id, decided_at) VALUES (?, ?)", (v, now_iso()))
         purge_track(conn, v)
     conn.commit()
     return len(gone)

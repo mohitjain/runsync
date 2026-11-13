@@ -15,6 +15,7 @@ from . import youtube as yt
 from .config import Config
 from .db import update_track
 from .diff import Diff, MassDeleteError, check_mass_delete, compute_diff
+from .player import read_video_id
 from .retry import PermanentError, run_with_retries
 from .util import now_iso
 
@@ -223,6 +224,20 @@ def _persist_snapshot(conn, got: Fetched, diff: Diff) -> None:
     conn.commit()
 
 
+def _drop_player_copies(conn) -> int:
+    """A trashed track's player copy is derived and goes with it (only a file whose own tag says it is that track's)."""
+    n = 0
+    for r in conn.execute("SELECT video_id, player_path FROM tracks WHERE status = 'trashed' AND player_path IS NOT NULL").fetchall():
+        path = Path(r["player_path"])
+        if path.exists() and read_video_id(path) == r["video_id"]:
+            path.unlink()
+            n += 1
+        update_track(conn, r["video_id"], player_path=None, clean_filename=None, player_format=None,
+                     player_size_bytes=None, player_built_at=None)
+    conn.commit()
+    return n
+
+
 def _trash_removed(cfg: Config, conn, removed: set[str], res: RunResult) -> None:
     """Tracks that left every selected playlist: the file goes to .trash/ (kept trash_days), the row is marked trashed."""
     for vid in sorted(removed):
@@ -235,6 +250,8 @@ def _trash_removed(cfg: Config, conn, removed: set[str], res: RunResult) -> None
         res.removed.append(vid)
         logger.info("trashed %s", vid)
     conn.commit()
+    if dropped := _drop_player_copies(conn):
+        logger.info("removed %d player copies of trashed tracks", dropped)
     purged = purge_trash(cfg)
     if purged:
         logger.info("purged %d files older than %d days from trash", purged, cfg.trash_days)

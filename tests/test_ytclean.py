@@ -467,14 +467,6 @@ def test_the_remove_command_saves_the_wish_locally_and_only_for_real_ids(cli_env
     assert bad.exit_code == 2 and "not a YouTube video id" in json.loads(bad.stdout)["error"]
 
 
-def test_the_track_is_forgotten_together_with_the_wish(conn):
-    from runsync import snapshot
-    conn.execute("INSERT INTO tracks (video_id, status) VALUES ('bad', 'trashed')")
-    conn.execute("INSERT INTO excluded (video_id, decided_at) VALUES ('bad', 'x')")
-    snapshot.purge_track(conn, "bad")
-    assert conn.execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 0
-
-
 # ---- replacements whose dead song lives only in Liked Music ---------------------------------------------------------------
 
 def _picks_world(conn, monkeypatch, in_refresh=()):

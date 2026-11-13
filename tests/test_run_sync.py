@@ -346,3 +346,24 @@ def test_the_result_names_the_playlists_it_could_not_read(world):
     assert world.run().unreadable_playlists != []                                   # and it keeps saying so
     world.playlists["Q"] = ids(1, "q")
     assert world.run().unreadable_playlists == []
+
+
+def test_a_trashed_track_takes_its_own_player_copy_with_it_but_never_a_foreign_file(world, monkeypatch):
+    monkeypatch.setattr(sync, "read_video_id", lambda path: path.stem)        # a copy's own tag: here, its file name
+    world.add_playlist("P", ids(12))
+    world.run()
+    copy = world.cfg.player / "m4a"
+    copy.mkdir(parents=True)
+    ours, foreign = copy / "t0.m4a", copy / "Other.m4a"
+    ours.write_bytes(b"our copy")
+    foreign.write_bytes(b"someone else's file")
+    world.conn.execute("UPDATE tracks SET player_path = ?, clean_filename = 't0.m4a', player_format = 'm4a' WHERE video_id = 't0'",
+                       (str(ours),))
+    world.conn.execute("UPDATE tracks SET player_path = ? WHERE video_id = 't1'", (str(foreign),))     # not t1's own file
+    world.conn.commit()
+    world.playlists["P"] = ids(12)[2:]                                       # t0 and t1 leave (2 of 12: under the guard)
+    res = world.run()
+    assert sorted(res.removed) == ["t0", "t1"]
+    assert not ours.exists() and foreign.exists()                            # ours is gone, the foreign file untouched
+    row = world.conn.execute("SELECT player_path, clean_filename FROM tracks WHERE video_id = 't0'").fetchone()
+    assert (row["player_path"], row["clean_filename"]) == (None, None)

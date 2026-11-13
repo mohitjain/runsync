@@ -245,3 +245,26 @@ def test_the_command_chooses_and_reports_the_library(tmp_path, monkeypatch):
     facts = json.loads(out.stdout)
     assert out.exit_code == 0 and facts["library"]["title"] == "Refresh" and facts["library_list"] == "Refresh"
     assert db.connect(load_config().db_path).execute("SELECT value FROM settings").fetchone()[0] == "PL9"
+
+
+# ---- what the database forgets must not come back through the mirror -----------------------------------------------------
+
+def test_a_dropped_duplicate_or_dead_song_that_is_still_liked_is_remembered_as_excluded(conn):
+    from runsync import snapshot
+    for v, st in (("dup", "merged"), ("dead", "unavailable"), ("unliked_dup", "merged")):
+        conn.execute("INSERT INTO tracks (video_id, status) VALUES (?, ?)", (v, st))
+    conn.execute("INSERT INTO liked_seen VALUES ('dup'), ('dead')")
+    assert snapshot.purge_gone(conn, present=set()) == 3
+    assert {r[0] for r in conn.execute("SELECT video_id FROM excluded")} == {"dup", "dead"}      # not the unliked one
+    assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0                         # the rows themselves are gone
+    # ... and the mirror then leaves them alone although nothing else remembers them
+    assert plan(["dup", "dead", "fresh"], excluded={"dup", "dead"}, winner=lambda v: v) and \
+        kinds(plan(["dup", "dead", "fresh"], excluded={"dup", "dead"})) == [("add", "fresh", "mirror")]
+
+
+def test_forgetting_a_track_keeps_its_exclusion_while_the_song_is_still_liked(conn):
+    from runsync import snapshot
+    conn.execute("INSERT INTO tracks (video_id, status) VALUES ('removed', 'trashed')")
+    conn.execute("INSERT INTO excluded VALUES ('removed', 'x')")
+    snapshot.purge_track(conn, "removed")                          # the trash ran out for it
+    assert conn.execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 1       # prune_excluded drops it once it is unliked

@@ -302,7 +302,7 @@ def _write_review(cfg: Config, conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         "SELECT m.video_id, t.original_title AS youtube_title, t.channel, m.review_reason AS reason, m.confidence, "
         "m.source_tier AS tier, m.artist, m.title, m.album, m.language FROM metadata m JOIN tracks t USING (video_id) "
-        "WHERE m.needs_review = 1 ORDER BY m.confidence, m.video_id").fetchall()
+        "WHERE t.status = 'downloaded' AND m.needs_review = 1 ORDER BY m.confidence, m.video_id").fetchall()
     write_review(cfg.review_path, [dict(r) for r in rows])
 
 

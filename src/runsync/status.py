@@ -32,7 +32,8 @@ def facts(cfg: Config, conn: sqlite3.Connection) -> dict:
         "state": "running" if running else ("done" if not queued else "stopped"), "activity": activity,
         "downloaded": done, "queued": queued, "total": done + queued, "unavailable": n.get("unavailable", 0),
         "untagged": untagged, "tagged": done - untagged,
-        "need_you": _count(conn, "SELECT COUNT(*) FROM metadata WHERE needs_review = 1"),
+        "need_you": _count(conn, "SELECT COUNT(*) FROM metadata m JOIN tracks t USING (video_id) "
+                                 "WHERE t.status = 'downloaded' AND m.needs_review = 1"),
         "player_copies": _count(conn, "SELECT COUNT(*) FROM tracks WHERE player_path IS NOT NULL"),
         "copies_target": _count(conn, "SELECT COUNT(*) FROM tracks t JOIN metadata m USING (video_id) "
                                       "WHERE t.status = 'downloaded' AND m.needs_review = 0"),
