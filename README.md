@@ -28,42 +28,44 @@ consent screen (add yourself as a test user) and a **Desktop** OAuth client; sav
 ## A normal run
 
 Say **"sync my music"**. runsync works through the steps below and shows a small table after each, so you always know what
-happened. The yellow steps are where you decide or confirm; nothing changes without you.
+happened. **Yellow steps ask you first; nothing changes without your yes.**
 
 ```mermaid
-flowchart TD
-    start(["You say: sync my music"]) --> s1
-    s1["<b>1 · Set up</b><br/>tools and cookies ok?"] --> s2
-    s2["<b>2 · Playlists</b><br/>read from YouTube<br/>👤 change which sync?"] --> s3
-    s3["<b>3 · Quality</b><br/>find better uploads for 128 kbps songs<br/>👤 search now?"] --> s4
-    s4["<b>4 · Library</b><br/>Liked Music into your library list, upgrades, clean-up<br/>👤 confirm the plan"] --> s5
-    s5["<b>5 · Download</b><br/>new songs into master/, removed ones into .trash/<br/>👤 how many now?"] --> s6
-    s6["<b>6 · Tags</b><br/>clean names, cover, language, player copy"] --> s7
-    s7["<b>7 · Search</b><br/>web-search what the code could not settle<br/>👤 search now?"] --> s8
-    s8["<b>8 · Duplicates</b><br/>keep the better copy of a song uploaded twice<br/>👤 confirm deletes"] --> s9
-    s9["<b>9 · YouTube</b><br/>remove the losing uploads from your playlists<br/>👤 confirm the plan"] --> s10
-    s10["<b>10 · Card</b><br/>copy to the player<br/>👤 confirm, then eject"] --> done(["Final report<br/>one table: what needs you"])
+flowchart TB
+    subgraph A["Get ready"]
+        direction LR
+        s1["1 Set up"] --> s2["2 Playlists"]
+    end
+    subgraph B["Find and fetch"]
+        direction LR
+        s3["3 Quality"] --> s4["4 Library"] --> s5["5 Download"]
+    end
+    subgraph C["Clean up"]
+        direction LR
+        s6["6 Tags"] --> s7["7 Search"] --> s8["8 Duplicates"]
+    end
+    subgraph D["Publish"]
+        direction LR
+        s9["9 YouTube"] --> s10["10 Card"]
+    end
+    A --> B --> C --> D
 
-    classDef gate fill:#fff4d6,stroke:#d9a400,color:#1f1f1f
-    class s2,s3,s4,s5,s7,s8,s9,s10 gate
+    classDef ask fill:#fff4d6,stroke:#b58900,stroke-width:2px,color:#1f1f1f
+    class s2,s3,s4,s5,s7,s8,s9,s10 ask
 ```
 
-Every YouTube change and every delete goes through the same safety loop:
+Anything that changes YouTube, deletes a file or writes to the card follows the same four beats: **preview, you
+confirm that exact plan, apply, read back and check.** Details for each step are below.
+
+Where your music lives:
 
 ```mermaid
 flowchart LR
-    a["Preview"] --> b{{"👤 Confirm the exact plan"}} --> c["Apply"] --> d["Read back and check"]
-```
-
-Where things live:
-
-```mermaid
-flowchart LR
-    yt[("YouTube<br/>the truth: playlists and Liked Music<br/>likes are never changed")] --> db[("state.db<br/>snapshot of YouTube<br/>plus changes still to push<br/>no history")]
-    db --> master["master/<br/>best audio, untouched"]
+    yt["YouTube<br/>the truth"] --> db["state.db<br/>snapshot, no history"]
+    db --> master["master/<br/>best audio"]
     master --> player["player/<br/>tagged copies"]
-    player --> card["Card<br/>mirror of your library list"]
-    master -. removed songs .-> trash[".trash/<br/>kept 14 days"]
+    player --> card["Card<br/>the player"]
+    master -.-> trash[".trash/<br/>14 days"]
 ```
 
 What each step does:
