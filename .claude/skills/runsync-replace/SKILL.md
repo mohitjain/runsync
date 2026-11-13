@@ -50,7 +50,7 @@ A pick or skip covers every lost upload of that song, and the song is not asked 
 
 ## 3. Push to YouTube
 
-Hand over to the **runsync-youtube** skill (step 2 onwards): the cleanup plan now contains, per playlist, the replacements
+Hand over to the **runsync-youtube** skill (step 2 onwards; it asks where replacements go when their dead song lives only in Liked Music): the cleanup plan now contains, per playlist, the replacements
 added in place, the dead entries removed (with and without a replacement), and any repeats and duplicates. It previews,
 asks for confirmation, writes once, reads the playlists back from YouTube and then lets the database forget what is done.
 

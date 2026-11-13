@@ -32,6 +32,11 @@ the database deletes what is dead; it keeps no history.
 `swaps`, `dead`, `replaced` each), `ops`, `adds`, `deletes`, `cost`, `days`, `batch`, `unmatched` and `items` (`op`, `why` =
 repeat | loser | swap | dead | replace | unwanted, `playlist`, `title`, `video_id`, `keep_id`, `keep_title`).
 
+**Replacements for Liked-Music-only songs.** `picks.picked` > 0 and `unmatched` > 0 means chosen replacements whose dead song
+lives only in Liked Music (it cannot be edited), so they cannot go in place. Ask with AskUserQuestion "Where should the N
+replacements go?" (options: the user's own synced playlists, e.g. `Refresh`, plus `Decide later`), then use
+`--cleanup --place-in "<name>"` for the preview **and** for the apply (the plan id depends on it).
+
 Nothing to do (`ops` = 0): one ⬜ row "Playlists are clean". Otherwise one table: a row per playlist, then one row per
 **swap**, **loser**, **dead** song and **replacement** (the songs the user will recognise; up to 40, then ask "Show the other N?"),
 repeats stay a count. A dead song with no replacement is **deleted**: the row says so, because it is the one permanent-looking
@@ -57,7 +62,7 @@ Ask with AskUserQuestion "Change N entries on YouTube?" with `Run the first B` (
 live YouTube and refuses if its id is not the confirmed one, so no separate re-read is needed:
 
 ```
-uv run runsync youtube --apply --confirm <plan_id> --json 2>/dev/null
+uv run runsync youtube --apply --confirm <plan_id> [--place-in "<name>"] --json 2>/dev/null
 ```
 
 Say one line first ("⏳ Changing N entries on YouTube, then checking them: about a minute"). It makes all its changes first
