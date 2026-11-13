@@ -43,6 +43,7 @@ class Op:
     title: str = ""
     keep_id: str = ""    # for loser/swap: the upload that stays (or is added)
     keep_title: str = ""
+    note: str = ""       # a short human reason shown in the preview, e.g. "Sony Music India 128k -> Topic 258k"
 
 
 @dataclass
@@ -140,9 +141,24 @@ def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = No
         if mirror and pid == library:
             plan.ops += mirror(pid, live)
     _place_replacements(plan, picks, titles, present, place_in)
+    if library in present:
+        plan.ops += _upgrade_ops(conn, library, present[library])
     plan.ops = _without_repeats(plan.ops)
     plan.ops.sort(key=lambda o: o.kind != "add")           # every add before any delete; sort is stable
     return plan
+
+
+def _upgrade_ops(conn: sqlite3.Connection, library: str, present: set[str]) -> list[Op]:
+    """Better uploads the quality search found: added to the library list. The old upload leaves later, through dedupe
+    (audio fingerprint, confirmed) and the cleanup; nothing is removed here."""
+    excluded = {r[0] for r in conn.execute("SELECT video_id FROM excluded")}
+    ops = []
+    for r in conn.execute("SELECT * FROM upgrades ORDER BY old_id"):
+        if r["new_id"] in present or r["new_id"] in excluded:
+            continue
+        note = f"{r['old_channel'] or 'upload'} {r['old_kbps'] or 0:.0f}k \u2192 {r['new_channel'] or 'upload'} {r['new_kbps'] or 0:.0f}k"
+        ops.append(Op("add", library, r["new_id"], "", 0, "upgrade", r["title"] or "", r["new_id"], r["title"] or "", note))
+    return ops
 
 
 def _without_repeats(ops: list[Op]) -> list[Op]:
@@ -228,7 +244,7 @@ def summary(plan: Plan) -> dict:
                     "replaced": sum(o.why == "replace" and o.kind == "delete" for o in mine)}
     return {"plan_id": plan_id(plan), "playlists": list(per.values()), "ops": len(plan.ops), "adds": plan.adds,
             "deletes": plan.deletes, "cost": plan.cost,
-            "mirror_adds": sum(o.why == "mirror" for o in plan.ops), "mirror_removes": sum(o.why == "unliked" for o in plan.ops)}
+            "upgrades": sum(o.why == "upgrade" for o in plan.ops), "mirror_adds": sum(o.why == "mirror" for o in plan.ops), "mirror_removes": sum(o.why == "unliked" for o in plan.ops)}
 
 
 def days_needed(plan: Plan, budget: int) -> int:

@@ -75,3 +75,13 @@ def test_youtube_cleanup_when_not_signed_in_is_a_clear_error(home):
 def test_resolve_dry_run_reports_what_it_would_do(home):
     out = run("resolve", "--dry-run", "--offline")
     assert out.exit_code == 0 and "Would resolve" in out.output
+
+
+def test_quality_without_a_search_is_local_and_says_how_many_songs_are_below_the_top(home):
+    home.execute("UPDATE tracks SET master_path = '/m', probe_bitrate_kbps = 128 WHERE video_id = 'a'")
+    home.execute("INSERT INTO metadata (video_id, artist, title, needs_review) VALUES ('a', 'A', 'Natural', 0)")
+    home.commit()
+    out = run("quality")
+    assert out.exit_code == 0 and "0 of 1 songs at the top tier" in out.output and "1 below" in out.output and "1 due" in out.output
+    facts = __import__("json").loads(run("quality", "--json").stdout)
+    assert (facts["songs"], facts["below_top"], facts["due"], facts["queued_upgrades"]) == (1, 1, 1, 0)

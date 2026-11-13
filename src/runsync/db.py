@@ -280,6 +280,22 @@ MIGRATIONS = [
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- preferences, e.g. library_playlist
     CREATE TABLE liked_seen (video_id TEXT PRIMARY KEY);                 -- Liked Music as of the last mirror
     """,
+    """
+    ALTER TABLE tracks ADD COLUMN quality_searched_at TEXT;   -- when we last looked for a better upload of this song
+    CREATE TABLE upgrades (              -- better uploads found, waiting to be added to the library list
+        new_id TEXT PRIMARY KEY,
+        old_id TEXT NOT NULL,
+        title TEXT,
+        new_channel TEXT,
+        new_kbps REAL,
+        old_channel TEXT,
+        old_kbps REAL
+    );
+    """,
+    """
+    ALTER TABLE tracks ADD COLUMN quality_result TEXT;   -- why the last quality search ended: found | no_results | no_match | matches_low
+    UPDATE tracks SET quality_result = 'found' WHERE video_id IN (SELECT old_id FROM upgrades);
+    """,
 ]
 
 

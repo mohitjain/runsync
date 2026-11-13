@@ -268,3 +268,14 @@ def test_forgetting_a_track_keeps_its_exclusion_while_the_song_is_still_liked(co
     conn.execute("INSERT INTO excluded VALUES ('removed', 'x')")
     snapshot.purge_track(conn, "removed")                          # the trash ran out for it
     assert conn.execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 1       # prune_excluded drops it once it is unliked
+
+
+def test_a_queued_upgrade_shows_in_the_cleanup_plan_with_its_note(conn, flow):
+    cfg, state = flow
+    state["liked"] = ["l1"]
+    conn.execute("INSERT INTO upgrades (new_id, old_id, title, new_channel, new_kbps, old_channel, old_kbps) "
+                 "VALUES ('UPGRADE0001', 'l1', 'Natural (Lyrics)', 'ImagineDragons', 257.5, 'Sony Music India', 128)")
+    facts = ytflow.cleanup(FakeApi(), conn, cfg, apply=False, confirm="", batch=100)["cleanup"]
+    assert facts["upgrades"] == 1 and facts["ops"] == 1
+    item = facts["items"][0]
+    assert (item["op"], item["why"], item["playlist"], item["note"]) == ("add", "upgrade", "Refresh", "Sony Music India 128k \u2192 ImagineDragons 258k")

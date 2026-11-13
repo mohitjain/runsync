@@ -86,6 +86,13 @@ Card (one row per fact; the ▲ ▼ rows only when something changed):
 | 📋 | 3 of 5 syncing: Liked Music, Refresh, Running · read through the YouTube API |
 | ▲ | Started: Gym Mix |
 
+## 2a. Quality
+
+Songs stuck below YouTube's top bitrate (about 128 kbps instead of 256): run the **runsync-quality** skill (step 1; offer the
+search in step 2 only when `due` > 0 and the cookies are fine). Found upgrades are queued and added by the YouTube plan in the
+next step, so they download in this run. Card: one summary row ("🎧 312 of 364 songs at the top tier"), a ⬆️ row per upgrade
+found, and a ⚠️/⏸️ row if the session was throttled. Nothing due: a single ⬜ row.
+
 ## 2b. Library list and YouTube
 
 Before downloading, run the **runsync-youtube** skill (steps 1, 2, 2b and 3) so Liked Music is mirrored into the library list
@@ -219,6 +226,7 @@ One table, one row per step with its headline number, built from the cards:
 |:-:|---|
 | ✅ | Set up |
 | ✅ | Playlists · 3 syncing · library: Refresh |
+| ✅ | Quality · 312 of 364 at the top tier · 3 upgrades found |
 | ✅ | Downloaded 50 new |
 | ✅ | Tagged 50 · 48 player copies |
 | ✅ | 3 duplicates removed |

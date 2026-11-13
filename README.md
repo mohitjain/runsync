@@ -31,14 +31,15 @@ Say **"sync my music"**. runsync works through these steps and shows a small tab
 happened:
 
 1. **Playlists**: reads them from YouTube (asks only if you want to change which ones sync).
-2. **Library**: Liked Music is mirrored into one playlist you choose (the first run asks which, or creates one), because YouTube does not let apps edit likes but does let them edit a playlist. A new like is added to it, an unlike is removed, and the library list is what gets synced.
-3. **Download**: new songs only; says how many are waiting and asks how many to fetch now.
-4. **Tags**: clean artist, title, album, year, language and cover; builds the player copies.
-5. **Search**: web-searches anything the code could not settle.
-6. **Duplicates**: the same song uploaded twice; keeps the best, asks about doubtful pairs.
-7. **YouTube**: removes repeats, duplicates and dead songs from your playlists and puts replacements in place; shows every
+2. **Quality**: songs stuck at ~128 kbps get a gentle search for a better upload of the same recording (never songs already at 256 kbps; a miss is retried after a month); finds are added to your library by the plan in the next step, and the duplicate step keeps the better copy.
+3. **Library**: Liked Music is mirrored into one playlist you choose (the first run asks which, or creates one), because YouTube does not let apps edit likes but does let them edit a playlist. A new like is added to it, an unlike is removed, and the library list is what gets synced.
+4. **Download**: new songs only; says how many are waiting and asks how many to fetch now.
+5. **Tags**: clean artist, title, album, year, language and cover; builds the player copies.
+6. **Search**: web-searches anything the code could not settle.
+7. **Duplicates**: the same song uploaded twice; keeps the best, asks about doubtful pairs.
+8. **YouTube**: removes repeats, duplicates and dead songs from your playlists and puts replacements in place; shows every
    song it changes and checks the result on YouTube. Nothing changes until you confirm the exact plan.
-8. **Card**: copies the music to the player; you confirm the plan first.
+9. **Card**: copies the music to the player; you confirm the plan first.
 
 You can stop after any step; the next run picks up where it stopped. While a long download runs, say "status".
 
@@ -55,6 +56,7 @@ You can stop after any step; the next run picks up where it stopped. While a lon
 | "clean my YouTube playlists" | `runsync-youtube` | mirrors Liked Music into your library list, brings your playlists up to date, shows every song and checks the result |
 | "replace the unavailable songs" | `runsync-replace` | finds new uploads of lost songs; your picks go in place of the dead entries; dead songs with no replacement are deleted |
 | "add this song to Running" | `runsync-add` | search, pick, confirm, add |
+| "improve the audio quality" | `runsync-quality` | finds better-sounding uploads for songs stuck at ~128 kbps (a few at a time, gently) and queues them for the next YouTube plan |
 
 ## When something goes wrong
 

@@ -30,7 +30,7 @@ the database deletes what is dead; it keeps no history.
 
 `uv run runsync youtube --cleanup --json 2>/dev/null`. `cleanup` has `plan_id`, `playlists` (`repeats`, `losers`,
 `swaps`, `dead`, `replaced` each), `ops`, `adds`, `deletes`, `cost`, `days`, `batch`, `mirror` (`library`, `paused`, `liked`), `mirror_adds`, `mirror_removes` and `items` (`op`, `why` =
-repeat | loser | swap | dead | replace | unwanted, `playlist`, `title`, `video_id`, `keep_id`, `keep_title`).
+repeat | loser | swap | dead | replace | unwanted | mirror | upgrade, `note`, `playlist`, `title`, `video_id`, `keep_id`, `keep_title`).
 
 Nothing to do (`ops` = 0): one ⬜ row "Playlists are clean". Otherwise one table: a row per playlist, then one row per
 **swap**, **loser**, **dead** song and **replacement** (the songs the user will recognise; up to 40, then ask "Show the other N?"),
@@ -40,6 +40,7 @@ change (it can still be undone until the next sync).
 | | YouTube cleanup · 191 changes | |
 |:-:|---|---|
 | 🔁 | Refresh · 128 repeated entries | removed (the first stays) |
+| ⬆️ | Refresh · Natural (Lyrics) | better upload added: Sony Music India 128k → ImagineDragons 258k (`note`) |
 | ⚰️ | Running · Paisa | no longer on YouTube, no replacement: removed |
 | 🔎 | Running · Sweet Emotion | dead entry replaced by "Aerosmith - Sweet Emotion" |
 | 🔄 | Refresh · How You Remind Me | the kept upload is added in place, then the other one removed |

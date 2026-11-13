@@ -18,6 +18,7 @@ source of truth, the Mac library is the cache, the card is a disposable mirror. 
 | Card | Identified by volume UUID, never the Mac's own disk. Only files in the card's manifest are ever deleted; copy to a temp name, fsync, verify; 20% removal guard; one M3U8 per playlist; undo of the last sync. |
 | YouTube API | Official Data API v3 over OAuth (Desktop client, PKCE; token owner-only, gitignored). Reads playlists (cookies are the fallback and still serve audio and Liked Music), mirrors Liked Music (read-only, through the cookies) into your **library list**, a playlist we can control, so a like adds the song and an unlike removes it, and runsync syncs from that list; removes repeats, merged duplicates, dead songs and songs you named from your playlists, puts chosen replacements in place of the dead entries, adds songs. Your replacement picks are saved in `state.db` until the push puts them in place of the dead entries, then forgotten. Daily quota 10,000 units; budget 8,000 (`youtube_budget`). |
 | Database | A snapshot of YouTube from the last sync plus the changes still to push. After a verified push, dead rows (unavailable, merged, trashed, aliases, picks, logs) are deleted; no history. Unavailable with no replacement means delete. |
+| Quality | About 1 song in 7 was uploaded without the 256 kbps tier (even official channels). `quality` looks for another upload of the same recording that has it, gently (cookies are needed to see the tier and are throttled when abused), queues it, and the normal plan, download and dedupe replace the old one. Top-quality songs are never searched; a miss is retried after a month. |
 | Safety | Failure is never removal: a failed or empty fetch deletes nothing. Removed tracks go to `.trash/` for 14 days. Mass-delete guard (>20%). Every destructive or outward write: preview, then `--confirm <plan id>` of that exact plan, journal, undo. |
 | Stack | Python 3.11, uv, yt-dlp (+ deno and yt-dlp-ejs), ffmpeg, chromaprint, mutagen, SQLite, typer + rich, pytest, ruff. |
 
@@ -27,7 +28,7 @@ source of truth, the Mac library is the cache, the card is a disposable mirror. 
 `review.csv` · `cache/covers/` · `config.yaml` (optional overrides) · `logs/`.
 
 Modules: `fetch` (read playlists) · `download` · `resolve/` (metadata) · `dedupe` · `player` · `card` · `sync` (the pipeline) ·
-`youtube` (API client) · `ytclean` (plan, push, verify, undo) · `ytsearch` (lost songs, picks) · `ytflow` (what `runsync
+`quality` (better uploads) · `youtube` (API client) · `ytclean` (plan, push, verify, undo) · `ytsearch` (lost songs, picks) · `ytflow` (what `runsync
 youtube` does) · `snapshot` (keeps the database a snapshot) · `status` · `cli` (options and a few plain lines).
 
 ## Learned

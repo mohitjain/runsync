@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.markup import escape
 
 from . import db, ytclean, ytflow, ytsearch
+from . import quality as quality_mod
 from . import status as status_facts
 from . import youtube as yt
 from .card import (
@@ -452,6 +453,48 @@ def card(register: str = typer.Option("", "--register", help="Mount path of a ca
         _emit({**state, **result})
         return
     _print_card(state)
+
+
+# ---- quality ----------------------------------------------------------------------------------------------------------
+
+@app.command()
+def quality(search: bool = typer.Option(False, "--search", help="Look for better uploads of a few songs (gentle: needs "
+                                        "your cookies, pauses between lookups, checks the session first)."),
+            limit: int = typer.Option(None, "--limit", "-n", min=1, help="Songs to search this run (default: config)."),
+            json_out: bool = typer.Option(False, "--json", help="Print facts as JSON on stdout (for the skill).")) -> None:
+    """Songs stuck below the top bitrate: how many, and with --search look for a better upload (adds nothing yet)."""
+    console.stderr = json_out
+    cfg, conn = _ctx()
+    setup_logging(cfg, "quality")
+    result = None
+    if search:
+        try:
+            with run_lock(cfg.library):
+                result = quality_mod.search(conn, cfg, limit=limit)
+        except AlreadyRunning as exc:
+            _fail(str(exc), 3)
+    facts = quality_mod.facts(conn, cfg.quality_recheck_days)
+    if result:
+        facts["search"] = {"searched": result.searched, "not_found": result.not_found, "aborted": result.aborted,
+                           "canary_before": result.canary_before, "canary_after": result.canary_after, "reasons": result.reasons,
+                           "found": [vars(f) for f in result.found]}
+    if json_out:
+        _emit(facts)
+        return
+    _say(f"[bold]Quality[/] {facts['top']} of {facts['songs']} songs at the top tier · {facts['below_top']} below "
+         f"({facts['due']} due a search, {facts['waiting']} searched recently)" + (f" · next search {facts['next_due']}" if facts["next_due"] else ""))
+    if result:
+        if result.aborted:
+            _say(f"[yellow]⏸️ {_esc(result.aborted)}[/]")
+        _say(f"🔎 searched {result.searched}: {len(result.found)} better upload(s) found, {result.not_found} none")
+        for f in result.found:
+            _say(f"  ⬆️ {_esc(f.song)}: {_esc(f.old_channel)} {f.old_kbps:.0f}k → {_esc(f.new_channel)} {f.new_kbps:.0f}k")
+    if facts["results"]:
+        names = {"found": "better upload found", "no_match": "no matching upload", "matches_low": "matches only ~128 kbps",
+                 "no_results": "nothing found", "unknown": "searched before reasons were recorded"}
+        _say("  " + " · ".join(f"{n} {names.get(k, k)}" for k, n in sorted(facts["results"].items())))
+    if facts["queued_upgrades"]:
+        _say(f"📚 {facts['queued_upgrades']} upgrade(s) wait for the next `runsync youtube --cleanup` plan.")
 
 
 # ---- youtube ----------------------------------------------------------------------------------------------------------
