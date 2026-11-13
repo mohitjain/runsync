@@ -52,6 +52,7 @@ class RunResult:
     tracks: list[dict] = field(default_factory=list)            # every download of this run, for the skills to list
     names: dict[str, str] = field(default_factory=dict)         # video id -> title, for every track attempted
     unavailable_reasons: dict[str, str] = field(default_factory=dict)
+    unreadable_playlists: list[dict] = field(default_factory=list)   # [{title, reason}]: removals are paused while any exist
 
     def to_dict(self) -> dict:
         """Facts for the skills to present (see `runsync sync --json`)."""
@@ -59,7 +60,7 @@ class RunResult:
                 "failed": [{"id": v, "title": self.names.get(v, v), "reason": r} for v, r in self.failed],
                 "unavailable_tracks": [{"id": v, "title": self.names.get(v, v), "reason": self.unavailable_reasons.get(v, "")}
                                        for v in self.unavailable],
-                "tracks": self.tracks, "aborted": self.aborted,
+                "tracks": self.tracks, "aborted": self.aborted, "unreadable_playlists": self.unreadable_playlists,
                 "anonymous": self.anonymous, "queue_total": self.queue_total,
                 "bytes": self.bytes_downloaded, "seconds": round(self.seconds_downloading),
                 "high_quality": self.high_quality, "standard_quality": self.standard_quality, "opus": self.opus}
@@ -159,6 +160,7 @@ class Fetched:
     by_playlist: dict[str, fetch.PlaylistItems] = field(default_factory=dict)
     ordered: list[str] = field(default_factory=list)             # distinct ids in playlist order
     complete: bool = True                                        # every selected playlist was read
+    failed: list[dict] = field(default_factory=list)             # [{title, reason}] for the ones that were not
 
 
 def _fetch_all(conn, playlists, cookies: Path | None, api, rep: Reporter) -> Fetched:
@@ -172,12 +174,14 @@ def _fetch_all(conn, playlists, cookies: Path | None, api, rep: Reporter) -> Fet
             logger.warning("fetch failed for '%s': %s", pl["title"], exc)
             rep.warn(f"fetch failed for '{pl['title']}': {exc}")
             got.complete = False
+            got.failed.append({"title": pl["title"], "reason": str(exc).splitlines()[0][:160]})
             continue
         prev = conn.execute("SELECT COUNT(*) FROM playlist_items WHERE playlist_id = ?", (pl["id"],)).fetchone()[0]
         if not items.ids and not items.unknown and prev > 0:
             logger.warning("'%s' came back empty but had %d tracks; treated as a failed fetch", pl["title"], prev)
             rep.warn(f"'{pl['title']}' came back empty but had {prev} tracks; treated as a failed fetch")
             got.complete = False
+            got.failed.append({"title": pl["title"], "reason": f"came back empty but had {prev} tracks"})
             continue
         got.by_playlist[pl["id"]] = items
         got.desired |= set(items.ids)
@@ -312,6 +316,7 @@ def run_sync(cfg: Config, conn, cookies: Path | None, dry_run: bool = False, for
         return res
 
     got = _fetch_all(conn, playlists, cookies, api, rep)
+    res.unreadable_playlists = got.failed
     if not got.by_playlist:
         res.aborted = "no playlist could be fetched; nothing changed"
         return res

@@ -510,6 +510,8 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
                                      "they are deleted."),
             remove: str = typer.Option("", "--remove", help="Video ids you want gone for good (comma separated): saved here; "
                                        "--cleanup then removes them from your playlists and lists the liked ones for you to unlike."),
+            place_in: str = typer.Option("", "--place-in", help="With --cleanup: put replacements for songs that live only "
+                                         "in Liked Music into this playlist (name or id)."),
             add: str = typer.Option("", "--add", help="Video ids to add (comma separated); needs --to."),
             to: str = typer.Option("", "--to", help="With --add: your playlist's name or id."),
             create: bool = typer.Option(False, "--create", help="With --add: make the playlist (private) if it is missing."),
@@ -539,7 +541,7 @@ def youtube(login: bool = typer.Option(False, "--login", help="Sign in to YouTub
         facts["picks"] = ytsearch.pick_counts(conn)
         facts |= ytflow.act(api, conn, cfg, cleanup_=cleanup, apply=apply, confirm=confirm, batch=batch, undo_=undo,
                             add_=add, to=to, create=create,
-                            status=not (search or replacements or pick or skip or remove or login))
+                            status=not (search or replacements or pick or skip or remove or login), place_in=place_in)
     except AlreadyRunning as exc:
         _fail(str(exc), 3, facts, json_out)
     except (ytclean.PlanRefused, ytclean.NoSuchPlaylist, yt.YouTubeError) as exc:

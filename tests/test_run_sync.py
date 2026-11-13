@@ -334,3 +334,15 @@ def test_the_sync_command_exits_2_when_it_aborts(world, monkeypatch):
     world.conn.commit()
     out, facts = _cli_sync(world, monkeypatch)
     assert out.exit_code == 2 and "no playlists selected" in facts["aborted"]
+
+
+def test_the_result_names_the_playlists_it_could_not_read(world):
+    world.add_playlist("P", ids(2))
+    world.add_playlist("Q", ids(1, "q"))
+    world.playlists["Q"] = RuntimeError("The playlist does not exist.\nmore detail")
+    res = world.run()
+    assert res.unreadable_playlists == [{"title": "Q", "reason": "The playlist does not exist."}]
+    assert res.to_dict()["unreadable_playlists"] == res.unreadable_playlists
+    assert world.run().unreadable_playlists != []                                   # and it keeps saying so
+    world.playlists["Q"] = ids(1, "q")
+    assert world.run().unreadable_playlists == []

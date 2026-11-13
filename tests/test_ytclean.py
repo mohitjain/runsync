@@ -502,3 +502,41 @@ def test_the_track_is_forgotten_together_with_the_wish(conn):
     conn.execute("INSERT INTO unwanted (video_id, decided_at) VALUES ('bad', 'x')")
     snapshot.purge_track(conn, "bad")
     assert conn.execute("SELECT COUNT(*) FROM unwanted").fetchone()[0] == 0
+
+
+# ---- replacements whose dead song lives only in Liked Music ---------------------------------------------------------------
+
+def _picks_world(conn, monkeypatch, in_refresh=()):
+    for pid, title in (("PL1", "Running"), ("PL2", "Refresh")):
+        conn.execute("INSERT INTO playlists (id, title, url, selected) VALUES (?, ?, 'u', 1)", (pid, title))
+    for v in ("lost1", "lost2"):
+        conn.execute("INSERT INTO tracks (video_id, title, status) VALUES (?, ?, 'unavailable')", (v, f"Lost {v}"))
+    conn.execute("INSERT INTO replacement_picks (lost_id, pick_id, title, status, decided_at) VALUES "
+                 "('lost1', 'UPLOAD00001', 'Found one', 'picked', 'x'), ('lost2', 'UPLOAD00002', 'Found two', 'picked', 'x')")
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1},
+                                                          {"id": "PL2", "title": "Refresh", "count": 1}])
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(*[(v, True) for v in (("ok",) if pid == "PL1" else ("ok2", *in_refresh))]))
+    monkeypatch.setattr(yt, "ratings", lambda api, ids: {v: "like" for v in ids})
+
+
+def test_replacements_for_songs_that_live_only_in_liked_music_go_where_the_owner_chose(conn, monkeypatch):
+    _picks_world(conn, monkeypatch)
+    without = ytclean.build_plan(object(), conn)
+    assert without.ops == [] and without.unmatched == 2                      # nowhere to put them yet
+    plan = ytclean.build_plan(object(), conn, place_in="PL2")
+    assert [(o.kind, o.playlist_id, o.video_id, o.why, o.title) for o in plan.ops] == [
+        ("add", "PL2", "UPLOAD00001", "replace", "Found one"), ("add", "PL2", "UPLOAD00002", "replace", "Found two")]
+    assert plan.unmatched == 0
+    assert {m["video_id"] for m in plan.manual} == {"lost1", "lost2"}       # the dead originals are for you to unlike by hand
+
+
+def test_a_replacement_already_in_the_playlist_is_not_added_again(conn, monkeypatch):
+    _picks_world(conn, monkeypatch, in_refresh=("UPLOAD00001",))
+    plan = ytclean.build_plan(object(), conn, place_in="PL2")
+    assert [(o.video_id) for o in plan.ops] == ["UPLOAD00002"]
+
+
+def test_a_place_that_is_not_one_of_your_synced_playlists_is_refused(conn, monkeypatch):
+    _picks_world(conn, monkeypatch)
+    with pytest.raises(ytclean.NoSuchPlaylist):
+        ytclean.build_plan(object(), conn, place_in="PLnope")

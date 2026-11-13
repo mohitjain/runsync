@@ -19,8 +19,8 @@ git clone https://github.com/mohitjain/runsync && cd runsync && uv sync
 Open Claude Code in the folder and say **"set up runsync"**. It checks the tools, walks you through the cookie file
 (`cookies.txt`, gitignored: it works like your login, never share it) and offers the YouTube login below.
 
-**YouTube login (optional, recommended).** Playlists are then read through the official API, so stale cookies stop
-mattering for reading, and runsync can tidy your playlists. Create a Google Cloud project with the YouTube Data API v3, a
+**YouTube login (optional, recommended).** Your playlists are then read through the official API, so stale cookies stop
+mattering for them (Liked Music is the exception: only cookies can read it), and runsync can tidy your playlists. Create a Google Cloud project with the YouTube Data API v3, a
 consent screen (add yourself as a test user) and a **Desktop** OAuth client; save its JSON as `client_secret.json`
 (gitignored), then run `uv run runsync youtube --login`. While the Google app is in testing mode the login can expire after
 7 days: run `--login` again.
@@ -59,7 +59,7 @@ You can stop after any step; the next run picks up where it stopped. While a lon
 
 | You see | What it means | Do this |
 |---|---|---|
-| "YouTube invalidated your cookies" | cookies rotate | re-export `cookies.txt` (the setup skill shows how) |
+| "YouTube invalidated your cookies", or Liked Music "could not be read" / "playlist does not exist" | cookies rotate; removals pause until Liked Music can be read | re-export `cookies.txt` (the setup skill shows how) |
 | "Your YouTube login expired" | the Google app is in testing mode (7 days) | `uv run runsync youtube --login` |
 | "quota for today is used up" | Google allows 10,000 units a day | nothing is lost; it resets at midnight Pacific and the message says in how many hours |
 | "Not confirmed. --apply needs --confirm …" | a plan changed since you confirmed it | look at the new plan and confirm again |

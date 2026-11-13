@@ -94,6 +94,10 @@ run would take, `removed` if any). Ask with AskUserQuestion how many to download
 - `Up to 50 (default)` (recommended) · `5 as a trial` · `All N` (long: run it in the background and use the
   **runsync-status** skill for progress) · `Skip downloading now`
 
+`unreadable_playlists` (in the dry run and the real run) lists playlists that could not be read (`title`, `reason`, usually
+Liked Music with stale cookies): add a ⚠️ row to the card "Liked Music could not be read: removals are paused. Re-export the
+cookies" and send the user to the cookie steps of **runsync-setup**; nothing is lost, the next run catches up.
+
 Then `uv run runsync sync -n N --json 2>/dev/null`. A failed playlist fetch never deletes anything; the mass-delete guard
 (`aborted`) means stop and ask; never pass `--force-delete`.
 

@@ -100,7 +100,7 @@ the push), as one table the user can click through, then ask:
 | 👎 | [Pearl Jam Alive](https://music.youtube.com/watch?v=VbhsYC4gKy4) | you asked to remove it |
 | 👎 | [Some dead song](https://music.youtube.com/watch?v=...) | no longer playable |
 
-Title = link (`url`); the last cell says why (`why` = unwanted → "you asked to remove it", dead → "no longer playable"). Ask with
+Title = link (`url`; a dead video's link may not open: tell the user to look for it greyed out in Liked Music); the last cell says why (`why` = unwanted → "you asked to remove it", dead → "no longer playable"). Ask with
 AskUserQuestion "Unlike these N songs in YouTube Music, then check?" with `Done, check again` and `Later`. On `Done`, run
 `uv run runsync youtube --cleanup --json 2>/dev/null` again and show what is left in `manual` (a ✅ row "All unliked" when
 empty). Once they are unliked, the next `runsync` sync notices they left Liked Music, moves their files to `.trash/` (kept 14

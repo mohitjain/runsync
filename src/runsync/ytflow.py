@@ -98,9 +98,16 @@ def add(api: yt.Api, conn: sqlite3.Connection, cfg: Config, ids: list[str], to: 
     return facts
 
 
-def cleanup(api: yt.Api, conn: sqlite3.Connection, cfg: Config, apply: bool, confirm: str, batch: int) -> dict:
+def cleanup(api: yt.Api, conn: sqlite3.Connection, cfg: Config, apply: bool, confirm: str, batch: int,
+            place_in: str = "") -> dict:
     with run_lock(cfg.library) if apply else nullcontext():
-        plan = ytclean.build_plan(api, conn)
+        target = None
+        if place_in:
+            found = ytclean.find_playlist(api, place_in)
+            if found is None:
+                raise ytclean.NoSuchPlaylist(f"No playlist called '{place_in}' for the replacements.")
+            target = found[0]
+        plan = ytclean.build_plan(api, conn, place_in=target)
         facts = {"cleanup": {**ytclean.summary(plan), "days": ytclean.days_needed(plan, cfg.youtube_budget), "batch": batch,
                              "items": [{"op": o.kind, "why": o.why, "playlist": plan.playlists[o.playlist_id],
                                         "video_id": o.video_id, "title": o.title, "keep_id": o.keep_id,
@@ -118,7 +125,7 @@ def undo(api: yt.Api, conn: sqlite3.Connection, cfg: Config) -> dict:
 
 
 def act(api: yt.Api, conn: sqlite3.Connection, cfg: Config, *, cleanup_: bool, apply: bool, confirm: str, batch: int,
-        undo_: bool, add_: str, to: str, create: bool, status: bool = True) -> dict:
+        undo_: bool, add_: str, to: str, create: bool, status: bool = True, place_in: str = "") -> dict:
     """Run the one thing the owner asked for and return its facts. With nothing asked: the signed-in playlists."""
     if (cleanup_ or apply or undo_ or add_) and not api.logged_in():
         raise yt.AuthError(f"Not signed in to YouTube. {yt.LOGIN_HINT}")
@@ -128,7 +135,7 @@ def act(api: yt.Api, conn: sqlite3.Connection, cfg: Config, *, cleanup_: bool, a
         ids = [video_id(v.strip()) for v in add_.split(",") if v.strip()]
         facts = add(api, conn, cfg, ids, to, create, apply, confirm, batch)
     elif cleanup_ or apply:
-        facts = cleanup(api, conn, cfg, apply, confirm, batch)
+        facts = cleanup(api, conn, cfg, apply, confirm, batch, place_in)
     elif undo_:
         facts = undo(api, conn, cfg)
     elif status and api.logged_in():

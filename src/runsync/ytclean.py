@@ -115,8 +115,9 @@ def plan_playlist(pid: str, entries: list[yt.Entry], winner: Callable[[str], str
     return adds + deletes
 
 
-def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None) -> Plan:
-    """Read your owned, selected playlists live and work out what to clean. Writes nothing."""
+def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None, place_in: str | None = None) -> Plan:
+    """Read your owned, selected playlists live and work out what to clean. Writes nothing. `place_in` is a playlist id:
+    replacements whose dead song is in none of your playlists (it lives in Liked Music) are added there."""
     owned = {p["id"]: p["title"] for p in yt.my_playlists(api)}
     selected = {r["id"] for r in conn.execute("SELECT id FROM playlists WHERE selected = 1")}
     plan = Plan()
@@ -127,23 +128,42 @@ def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = No
         "SELECT pick_id, title FROM replacement_picks WHERE pick_id IS NOT NULL")})
     dead = {r["video_id"] for r in conn.execute("SELECT video_id FROM tracks WHERE status = 'unavailable'")} - set(picks)
     unwanted = {r["video_id"] for r in conn.execute("SELECT video_id FROM unwanted")}
+    present: dict[str, set[str]] = {}
     for pid, title in owned.items():
         if pid in NEVER_WRITE or pid not in selected or (only is not None and pid not in only):
             continue
         plan.playlists[pid] = title
         live = yt.playlist_entries(api, pid)
         plan.counts[pid] = len(live)
+        present[pid] = {e.video_id for e in live}
         plan.ops += plan_playlist(pid, live, lambda v: winner_of(conn, v), lambda v: titles.get(v, ""), picks, dead, unwanted)
+    placed = _place_replacements(plan, picks, titles, present, place_in)
     plan.ops.sort(key=lambda o: o.kind != "add")           # every add before any delete; sort is stable
     handled = {o.video_id for o in plan.ops if o.kind == "delete" and o.why in ("dead", "replace")}
-    unmatched = (dead | set(picks)) - handled
+    unmatched = (dead | set(picks)) - handled - placed
     plan.unmatched = len(unmatched)
     # Liked Music cannot be edited through the API: what is still liked there is for the owner to unlike by hand
-    check = sorted(unwanted | unmatched)
+    check = sorted(unwanted | unmatched | placed)
     liked = yt.ratings(api, check) if check else {}
-    plan.manual = [{"video_id": v, "title": titles.get(v, ""), "why": "unwanted" if v in unwanted else "dead",
+    plan.manual = [{"video_id": v, "title": titles.get(v) or "(unavailable video: grey in Liked Music)", "why": "unwanted" if v in unwanted else "dead",
                     "url": f"https://music.youtube.com/watch?v={v}"} for v in check if liked.get(v) == "like"]
     return plan
+
+
+def _place_replacements(plan: Plan, picks: dict[str, str], titles: dict[str, str], present: dict[str, set[str]],
+                        place_in: str | None) -> set[str]:
+    """Add the chosen replacements whose dead song is in none of your playlists to `place_in`. Returns the lost ids placed."""
+    if not place_in:
+        return set()
+    if place_in not in present:
+        raise NoSuchPlaylist("The playlist for replacements is not one of your synced playlists.")
+    in_place = {o.video_id for o in plan.ops if o.kind == "delete" and o.why == "replace"}
+    waiting = {lost: pick for lost, pick in picks.items() if lost not in in_place}
+    for pick in dict.fromkeys(waiting.values()):
+        if pick not in present[place_in] and not any(o.kind == "add" and o.video_id == pick and o.playlist_id == place_in
+                                                    for o in plan.ops):
+            plan.ops.append(Op("add", place_in, pick, "", 0, "replace", titles.get(pick, ""), pick, titles.get(pick, "")))
+    return set(waiting)
 
 
 class NoSuchPlaylist(Exception):
