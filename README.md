@@ -27,19 +27,57 @@ consent screen (add yourself as a test user) and a **Desktop** OAuth client; sav
 
 ## A normal run
 
-Say **"sync my music"**. runsync works through these steps and shows a small table after each, so you always know what
-happened:
+Say **"sync my music"**. runsync works through the steps below and shows a small table after each, so you always know what
+happened. The yellow steps are where you decide or confirm; nothing changes without you.
 
-1. **Playlists**: reads them from YouTube (asks only if you want to change which ones sync).
-2. **Quality**: songs stuck at ~128 kbps get a gentle search for a better upload of the same recording (never songs already at 256 kbps; a miss is retried after a month); finds are added to your library by the plan in the next step, and the duplicate step keeps the better copy.
-3. **Library**: Liked Music is mirrored into one playlist you choose (the first run asks which, or creates one), because YouTube does not let apps edit likes but does let them edit a playlist. A new like is added to it, an unlike is removed, and the library list is what gets synced.
-4. **Download**: new songs only; says how many are waiting and asks how many to fetch now.
-5. **Tags**: clean artist, title, album, year, language and cover; builds the player copies.
-6. **Search**: web-searches anything the code could not settle.
-7. **Duplicates**: the same song uploaded twice; keeps the best, asks about doubtful pairs.
-8. **YouTube**: removes repeats, duplicates and dead songs from your playlists and puts replacements in place; shows every
-   song it changes and checks the result on YouTube. Nothing changes until you confirm the exact plan.
-9. **Card**: copies the music to the player; you confirm the plan first.
+```mermaid
+flowchart TD
+    start(["You say: sync my music"]) --> s1
+    s1["<b>1 · Set up</b><br/>tools and cookies ok?"] --> s2
+    s2["<b>2 · Playlists</b><br/>read from YouTube<br/>👤 change which sync?"] --> s3
+    s3["<b>3 · Quality</b><br/>find better uploads for 128 kbps songs<br/>👤 search now?"] --> s4
+    s4["<b>4 · Library</b><br/>Liked Music into your library list, upgrades, clean-up<br/>👤 confirm the plan"] --> s5
+    s5["<b>5 · Download</b><br/>new songs into master/, removed ones into .trash/<br/>👤 how many now?"] --> s6
+    s6["<b>6 · Tags</b><br/>clean names, cover, language, player copy"] --> s7
+    s7["<b>7 · Search</b><br/>web-search what the code could not settle<br/>👤 search now?"] --> s8
+    s8["<b>8 · Duplicates</b><br/>keep the better copy of a song uploaded twice<br/>👤 confirm deletes"] --> s9
+    s9["<b>9 · YouTube</b><br/>remove the losing uploads from your playlists<br/>👤 confirm the plan"] --> s10
+    s10["<b>10 · Card</b><br/>copy to the player<br/>👤 confirm, then eject"] --> done(["Final report<br/>one table: what needs you"])
+
+    classDef gate fill:#fff4d6,stroke:#d9a400,color:#1f1f1f
+    class s2,s3,s4,s5,s7,s8,s9,s10 gate
+```
+
+Every YouTube change and every delete goes through the same safety loop:
+
+```mermaid
+flowchart LR
+    a["Preview"] --> b{{"👤 Confirm the exact plan"}} --> c["Apply"] --> d["Read back and check"]
+```
+
+Where things live:
+
+```mermaid
+flowchart LR
+    yt[("YouTube<br/>the truth: playlists and Liked Music<br/>likes are never changed")] --> db[("state.db<br/>snapshot of YouTube<br/>plus changes still to push<br/>no history")]
+    db --> master["master/<br/>best audio, untouched"]
+    master --> player["player/<br/>tagged copies"]
+    player --> card["Card<br/>mirror of your library list"]
+    master -. removed songs .-> trash[".trash/<br/>kept 14 days"]
+```
+
+What each step does:
+
+1. **Set up**: checks the tools, the project and your cookie file (the setup skill fixes what is missing).
+2. **Playlists**: reads them from YouTube and asks only if you want to change which ones sync.
+3. **Quality**: songs stuck at ~128 kbps get a gentle search for a better upload of the same recording (never songs already at 256 kbps; a miss is retried after a month). Finds are added to your library by the plan in the next step, and the duplicate step keeps the better copy.
+4. **Library**: Liked Music is mirrored into one playlist you choose (the first run asks which, or creates one), because YouTube does not let apps edit likes but does let them edit a playlist. A new like is added to it, an unlike is removed, and the library list is what gets synced. Repeats, dead songs and replacements are handled in the same plan.
+5. **Download**: new songs only; says how many are waiting and asks how many to fetch now.
+6. **Tags**: clean artist, title, album, year, language and cover; builds the player copies.
+7. **Search**: web-searches anything the code could not settle.
+8. **Duplicates**: the same song uploaded twice; keeps the best by its audio, asks about doubtful pairs.
+9. **YouTube**: removes the losing uploads from your playlists; shows every song it changes and checks the result on YouTube.
+10. **Card**: copies the music to the player; you confirm the plan first.
 
 You can stop after any step; the next run picks up where it stopped. While a long download runs, say "status".
 
