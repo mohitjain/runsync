@@ -5,6 +5,7 @@ import pytest
 
 from runsync import youtube as yt
 from runsync import ytclean
+from runsync.dedupe import winner_of
 from runsync.ytclean import Op, Plan, PlanRefused
 
 
@@ -50,8 +51,8 @@ def test_a_clean_playlist_has_nothing_to_do():
 def test_resolve_winner_follows_chains_and_survives_loops(conn):
     for v, w in [("a", "b"), ("b", "c"), ("x", "y"), ("y", "x")]:
         conn.execute("INSERT INTO aliases (video_id, winner_id, merged_at) VALUES (?, ?, 't')", (v, w))
-    assert ytclean.resolve_winner(conn, "a") == "c" and ytclean.resolve_winner(conn, "z") == "z"
-    assert ytclean.resolve_winner(conn, "x") in {"x", "y"}              # a loop ends instead of hanging
+    assert winner_of(conn, "a") == "c" and winner_of(conn, "z") == "z"
+    assert winner_of(conn, "x") in {"x", "y"}              # a loop ends instead of hanging
 
 
 def test_plan_id_names_the_exact_operations():
@@ -325,3 +326,177 @@ def test_apply_returns_what_it_really_did_for_the_read_back(conn):
     r = ytclean.apply_plan(api, conn, plan, ytclean.plan_id(plan), batch=2)
     assert [(o.kind, o.video_id) for o in r.ops_done] == [("add", "win"), ("delete", "lose")]    # only what ran
     assert r.before == {"PL1": 4} and r.playlists == {"PL1": "Running"}
+
+
+# ---- dead songs and in-place replacements -------------------------------------------------------------------------------
+
+def dead_entries(*specs):
+    """specs: (video_id, available)"""
+    return [yt.Entry(v, f"item-{n}-{v}", n, f"Title {v}" if ok else "Deleted video", "Chan", ok) for n, (v, ok) in enumerate(specs)]
+
+
+def test_a_dead_song_with_no_replacement_is_deleted_and_an_unplayable_entry_too():
+    ops = ytclean.plan_playlist("PL1", dead_entries(("a", True), ("gone", True), ("hidden", False)), lambda v: v,
+                                lambda v: f"Title {v}", picks={}, dead={"gone"})
+    assert [(o.kind, o.video_id, o.why) for o in ops] == [("delete", "gone", "dead"), ("delete", "hidden", "dead")]
+    assert ops[0].title == "Title gone"                              # the owner sees the song's name, not "Deleted video"
+
+
+def test_a_picked_replacement_goes_in_place_add_first_then_the_dead_entry_goes():
+    ops = ytclean.plan_playlist("PL1", dead_entries(("a", True), ("gone", True)), lambda v: v, lambda v: f"Title {v}",
+                                picks={"gone": "new"}, dead=set())
+    assert [(o.kind, o.video_id, o.why) for o in ops] == [("add", "new", "replace"), ("delete", "gone", "replace")]
+    assert ops[0].position == 1 and ops[1].keep_id == "new"
+
+
+def test_two_dead_entries_with_the_same_pick_add_it_once_and_a_pick_already_there_is_not_added():
+    twice = ytclean.plan_playlist("PL1", dead_entries(("g1", True), ("g2", True)), lambda v: v, lambda v: v,
+                                  picks={"g1": "new", "g2": "new"}, dead=set())
+    assert [(o.kind, o.video_id) for o in twice] == [("add", "new"), ("delete", "g1"), ("delete", "g2")]
+    there = ytclean.plan_playlist("PL1", dead_entries(("new", True), ("g1", True)), lambda v: v, lambda v: v,
+                                  picks={"g1": "new"}, dead=set())
+    assert [(o.kind, o.video_id) for o in there] == [("delete", "g1")]
+
+
+def test_build_plan_reads_dead_songs_and_picks_from_the_database(conn, monkeypatch):
+    conn.execute("INSERT INTO playlists (id, title, url, selected) VALUES ('PL1', 'Running', 'u', 1)")
+    for v in ("d1", "d2", "d3"):
+        conn.execute("INSERT INTO tracks (video_id, title, status) VALUES (?, ?, 'unavailable')", (v, f"Lost {v}"))
+    conn.execute("INSERT INTO replacement_picks (lost_id, pick_id, title, status, decided_at) VALUES "
+                 "('d1', 'UP1', 'Found one', 'picked', 'now'), ('d2', NULL, NULL, 'skipped', 'now')")
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 3}])
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(("d1", True), ("d2", True), ("ok", True)))
+    plan = ytclean.build_plan(object(), conn)
+    assert keys(plan.ops) == [("add", "UP1", "replace"), ("delete", "d1", "replace"), ("delete", "d2", "dead")]
+    assert plan.ops[0].title == "Found one"
+    s = ytclean.summary(plan)
+    assert s["playlists"][0]["dead"] == 1 and s["playlists"][0]["replaced"] == 1
+
+
+def test_verify_checks_that_a_replacement_is_present_and_the_dead_entry_is_gone(monkeypatch):
+    ops = [Op("add", "PL1", "new", "", 1, "replace", "New", "new", "New"),
+           Op("delete", "PL1", "gone", "item-1-gone", 1, "replace", "Gone", "new", "New")]
+    _live(monkeypatch, [yt.Entry("a", "item-0-a", 0, "A", "c", True)])
+    v = ytclean.verify(object(), _applied(ops, {"PL1": 2}), sleep=lambda s: None)
+    assert not v["ok"] and {p["problem"] for p in v["problems"]} == {"the song is not in the playlist",
+                                                                    "the kept upload is missing from the playlist"}
+
+
+# ---- after a verified push the database follows YouTube -----------------------------------------------------------------
+
+def test_a_verified_push_updates_the_snapshot_and_deletes_what_it_made_dead(conn):
+    from runsync import snapshot
+    conn.execute("INSERT INTO playlists (id, title, url, selected) VALUES ('PL1', 'Running', 'u', 1)")
+    for v, st in (("gone", "unavailable"), ("lose", "merged"), ("keep", "downloaded"), ("elsewhere", "unavailable")):
+        conn.execute("INSERT INTO tracks (video_id, title, status) VALUES (?, ?, ?)", (v, v, st))
+    conn.execute("INSERT INTO playlist_items VALUES ('PL1', 'gone', 0), ('PL1', 'lose', 1), ('PL1', 'keep', 2), ('PL1', 'elsewhere', 3)")
+    conn.execute("INSERT INTO aliases (video_id, winner_id, merged_at) VALUES ('lose', 'keep', 'x')")
+    conn.execute("INSERT INTO replacement_picks (lost_id, pick_id, title, status, decided_at) VALUES ('gone', 'UP1', 't', 'picked', 'x')")
+    conn.commit()
+    ops = [Op("delete", "PL1", "gone", "i1", 0, "replace", "Gone", "UP1", "Up"), Op("delete", "PL1", "lose", "i2", 1, "loser", "Lose", "keep")]
+    applied = _applied(ops, {"PL1": 4})
+    applied.live = {"PL1": [yt.Entry("keep", "i3", 0, "Keep", "c", True), yt.Entry("UP1", "i4", 1, "Up", "c", True),
+                            yt.Entry("elsewhere", "i5", 2, "E", "c", True)]}
+    assert snapshot.settle_push(conn, applied, ok=False) == {"purged": 0}               # not verified: nothing is forgotten
+    assert conn.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 4
+    assert snapshot.settle_push(conn, applied, ok=True) == {"purged": 2}
+    left = {r[0] for r in conn.execute("SELECT video_id FROM tracks")}
+    assert left == {"keep", "elsewhere"}                         # elsewhere is still listed by YouTube: it stays
+    assert [r[0] for r in conn.execute("SELECT video_id FROM playlist_items ORDER BY position")] == ["keep", "UP1", "elsewhere"]
+    for table in ("aliases", "replacement_picks"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_the_cleanup_command_through_to_the_purge(cli_env, monkeypatch):
+    from runsync import db
+    from runsync.config import load_config
+    cli, _calls = cli_env
+    cfg = load_config()
+    cfg.ensure_dirs()
+    c = db.connect(cfg.db_path)
+    c.execute("INSERT INTO playlists (id, title, url, selected) VALUES ('PL1', 'Running', 'u', 1)")
+    c.execute("INSERT INTO tracks (video_id, title, status) VALUES ('a', 'Song A', 'unavailable')")
+    c.execute("INSERT INTO playlist_items VALUES ('PL1', 'a', 0), ('PL1', 'b', 1)")
+    c.commit()
+    playlist = dead_entries(("a", True), ("b", True))                      # YouTube, as a list that deletes change
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: list(playlist))
+    monkeypatch.setattr(yt, "delete_entry", lambda api, item: playlist.__delitem__(
+        next(i for i, e in enumerate(playlist) if e.item_id == item)))
+    prev = json.loads(_run(cli, "--cleanup", "--json").stdout)["cleanup"]
+    assert prev["deletes"] == 1 and prev["items"][0]["why"] == "dead" and prev["items"][0]["title"] == "Song A"
+    done = json.loads(_run(cli, "--apply", "--confirm", prev["plan_id"], "--json").stdout)["applied"]
+    assert done["deleted"] == 1 and done["verify"]["ok"] and done["forgotten"] == 1
+    assert c.execute("SELECT COUNT(*) FROM tracks").fetchone()[0] == 0              # the dead song is gone from the database too
+    assert [r[0] for r in c.execute("SELECT video_id FROM playlist_items")] == ["b"]   # and the snapshot follows YouTube
+
+
+def test_an_unexpected_crash_mid_run_is_recorded_and_can_still_be_undone(conn):
+    class Crashing(FakeApi):
+        def request(self, method, resource, params=None, body=None):
+            if len(self.calls) == 1:
+                raise RuntimeError("disk full")
+            return super().request(method, resource, params, body)
+    plan = swap_plan()
+    with pytest.raises(RuntimeError, match="disk full"):
+        ytclean.apply_plan(Crashing(), conn, plan, ytclean.plan_id(plan))
+    assert conn.execute("SELECT status FROM youtube_runs").fetchone()[0] == "interrupted"     # never left as "running"
+    undo = FakeApi()
+    assert ytclean.undo_last_run(undo, conn).removed == 1                                       # the one add that did happen
+
+
+# ---- songs the owner wants gone: entries removed, then unliked -------------------------------------------------------------
+
+def test_an_unwanted_song_is_deleted_from_every_playlist_entry():
+    ops = ytclean.plan_playlist("PL1", dead_entries(("a", True), ("bad", True), ("c", True), ("bad", True)), lambda v: v,
+                                lambda v: f"Title {v}", unwanted={"bad"})
+    assert [(o.kind, o.video_id, o.why) for o in ops] == [("delete", "bad", "unwanted"), ("delete", "bad", "repeat")]
+
+
+def test_nothing_can_change_a_like():
+    assert not hasattr(yt, "rate") and not hasattr(yt, "ratings")       # there is no function that could touch a like
+
+
+def test_the_remove_command_saves_the_wish_locally_and_only_for_real_ids(cli_env):
+    from runsync import db
+    from runsync.config import load_config
+    cli, calls = cli_env
+    out = json.loads(_run(cli, "--remove", "abcdefghijk,ZZZZZZZZZZZ", "--json").stdout)
+    assert out["wanted_gone"] == ["abcdefghijk", "ZZZZZZZZZZZ"] and calls == []
+    assert db.connect(load_config().db_path).execute("SELECT COUNT(*) FROM excluded").fetchone()[0] == 2
+    bad = _run(cli, "--remove", "nope", "--json")
+    assert bad.exit_code == 2 and "not a YouTube video id" in json.loads(bad.stdout)["error"]
+
+
+# ---- replacements whose dead song lives only in Liked Music ---------------------------------------------------------------
+
+def _picks_world(conn, monkeypatch, in_refresh=()):
+    for pid, title in (("PL1", "Running"), ("PL2", "Refresh")):
+        conn.execute("INSERT INTO playlists (id, title, url, selected) VALUES (?, ?, 'u', 1)", (pid, title))
+    for v in ("lost1", "lost2"):
+        conn.execute("INSERT INTO tracks (video_id, title, status) VALUES (?, ?, 'unavailable')", (v, f"Lost {v}"))
+    conn.execute("INSERT INTO replacement_picks (lost_id, pick_id, title, status, decided_at) VALUES "
+                 "('lost1', 'UPLOAD00001', 'Found one', 'picked', 'x'), ('lost2', 'UPLOAD00002', 'Found two', 'picked', 'x')")
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1},
+                                                          {"id": "PL2", "title": "Refresh", "count": 1}])
+    monkeypatch.setattr(yt, "playlist_entries", lambda api, pid: dead_entries(*[(v, True) for v in (("ok",) if pid == "PL1" else ("ok2", *in_refresh))]))
+
+
+def test_replacements_for_songs_that_live_only_in_liked_music_go_where_the_owner_chose(conn, monkeypatch):
+    _picks_world(conn, monkeypatch)
+    without = ytclean.build_plan(object(), conn)
+    assert without.ops == []                                                  # nowhere to put them yet
+    plan = ytclean.build_plan(object(), conn, place_in="PL2")
+    assert [(o.kind, o.playlist_id, o.video_id, o.why, o.title) for o in plan.ops] == [
+        ("add", "PL2", "UPLOAD00001", "replace", "Found one"), ("add", "PL2", "UPLOAD00002", "replace", "Found two")]
+
+
+def test_a_replacement_already_in_the_playlist_is_not_added_again(conn, monkeypatch):
+    _picks_world(conn, monkeypatch, in_refresh=("UPLOAD00001",))
+    plan = ytclean.build_plan(object(), conn, place_in="PL2")
+    assert [(o.video_id) for o in plan.ops] == ["UPLOAD00002"]
+
+
+def test_a_place_that_is_not_one_of_your_synced_playlists_is_refused(conn, monkeypatch):
+    _picks_world(conn, monkeypatch)
+    with pytest.raises(ytclean.NoSuchPlaylist):
+        ytclean.build_plan(object(), conn, place_in="PLnope")

@@ -250,14 +250,52 @@ MIGRATIONS = [
         position INTEGER
     );
     """,
+    """
+    CREATE TABLE replacement_picks (   -- the owner's answer for a song YouTube no longer serves (one row per lost video id)
+        lost_id TEXT PRIMARY KEY,
+        pick_id TEXT,                  -- the upload chosen as its replacement (NULL when skipped)
+        title TEXT,                    -- the chosen upload's title
+        status TEXT NOT NULL,          -- picked (replacement chosen, waiting to be pushed) | skipped (owner said none)
+        decided_at TEXT NOT NULL
+    );
+    """,
+    """
+    ALTER TABLE tracks ADD COLUMN player_built_at TEXT;   -- when the player copy was last built (was an event)
+    UPDATE tracks SET player_built_at = (SELECT MAX(at) FROM track_events e
+                                         WHERE e.video_id = tracks.video_id AND e.event = 'player_built');
+    DROP TABLE track_events;             -- history: nothing else read it
+    DROP TABLE runs;                     -- history: nothing read it
+    """,
+    """
+    DROP TABLE metadata_candidates;      -- every candidate ever considered: written, never read
+    """,
+    """
+    CREATE TABLE unwanted (              -- songs the owner wants gone: playlist entries removed, liked ones unliked by hand, then forgotten
+        video_id TEXT PRIMARY KEY,
+        decided_at TEXT NOT NULL
+    );
+    """,
+    """
+    ALTER TABLE unwanted RENAME TO excluded;   -- songs that must never be in the library (removed while still liked)
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);   -- preferences, e.g. library_playlist
+    CREATE TABLE liked_seen (video_id TEXT PRIMARY KEY);                 -- Liked Music as of the last mirror
+    """,
 ]
 
 
 def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
+    existed = path.exists()
     conn = sqlite3.connect(path, timeout=30)  # wait for a concurrent writer instead of failing
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if existed and 0 < version < len(MIGRATIONS):
+        # a migration can drop tables: keep one copy of the database as it was (overwritten by the next migration)
+        backup = path.with_name(path.name + ".pre-migration")
+        with sqlite3.connect(backup) as dest:
+            conn.backup(dest)
+        dest.close()
     migrate(conn)
     return conn
 
@@ -276,14 +314,6 @@ def update_track(conn: sqlite3.Connection, video_id: str, **cols) -> None:
         return
     sets = ", ".join(f"{k} = ?" for k in cols)
     conn.execute(f"UPDATE tracks SET {sets} WHERE video_id = ?", [*cols.values(), video_id])
-
-
-def log_event(conn: sqlite3.Connection, video_id: str, event: str, detail: dict | None = None) -> None:
-    import json
-    from datetime import UTC, datetime
-    conn.execute("INSERT INTO track_events (video_id, at, event, detail) VALUES (?, ?, ?, ?)",
-                 (video_id, datetime.now(UTC).isoformat(timespec="microseconds"), event,
-                  json.dumps(detail, default=str) if detail else None))
 
 
 def migrate(conn: sqlite3.Connection) -> None:

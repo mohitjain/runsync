@@ -22,7 +22,6 @@ LABELS = {
     "times music", "humble music", "ishtar punjabi", "warner records vault", "white hill music", "t-series apna punjab",
     "lahari music", "eros now music", "vevo", "volume", "gully boy pkg", "basekSoch".lower(), "bollywood classics",
 }
-REMASTER_RE = re.compile(r"[\(\[]?\s*(?:(\d{4})\s+)?re-?master(?:ed)?(?:\s+(\d{4}))?\s*[\)\]]?", re.IGNORECASE)
 FEAT_RE = re.compile(r"\s*[\(\[]?\s*\b(?:feat\.?|ft\.?|featuring)\s+([^\)\]\|]+?)\s*[\)\]]?\s*(?=$|[\(\[\|]|\s[-–—]\s)", re.IGNORECASE)
 SONG_BY_RE = re.compile(r"(?:song|sung|singer|singers)\s+by\s+([^{\(\[\|]+)", re.IGNORECASE)
 DASH_RE = re.compile(r"\s+[-–—]\s*|\s*[-–—]\s+")

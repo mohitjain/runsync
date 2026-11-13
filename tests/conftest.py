@@ -49,3 +49,10 @@ def no_google_network(monkeypatch):
         raise AssertionError("a test tried to contact Google; pass a fake transport")
     monkeypatch.setattr(youtube, "_http", blocked)
     monkeypatch.setattr(youtube, "_post_form", blocked)
+
+
+@pytest.fixture(autouse=True)
+def isolated_repo_root(monkeypatch, tmp_path_factory):
+    """Cookies, the Google client file and the saved login live in the repo root: a test must never see the real ones."""
+    from runsync import config
+    monkeypatch.setattr(config, "REPO_ROOT", tmp_path_factory.mktemp("repo"))

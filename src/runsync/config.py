@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 @dataclass
 class Config:
     library: Path = field(default_factory=lambda: Path(os.environ.get("RUNSYNC_HOME", "~/Music/RunSync")).expanduser())
-    cookies: Path = REPO_ROOT / "cookies.txt"
+    cookies: Path = field(default_factory=lambda: REPO_ROOT / "cookies.txt")   # looked up when the Config is made
     max_downloads_per_run: int = 50
     pause_seconds: float = 5.0  # yt-dlp wiki recommends 5-10s between downloads on an account
     mass_delete_threshold: float = 0.20

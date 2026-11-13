@@ -12,7 +12,8 @@ def test_migrations_reach_latest_and_columns_exist(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS)
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(tracks)")}
     assert {"sha256", "file_size_bytes", "original_title", "clean_filename", "candidates_json"} <= cols
-    assert conn.execute("SELECT COUNT(*) FROM track_events").fetchone()[0] == 0
+    tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert not ({"track_events", "runs"} & tables)           # no history tables: the database is a snapshot
 
 
 def test_v1_database_upgrades_keeping_rows(tmp_path):
@@ -38,13 +39,6 @@ def test_update_track_rejects_unknown_column(tmp_path):
         db.update_track(conn, "a", bogus=1)
 
 
-def test_log_event(tmp_path):
-    conn = db.connect(tmp_path / "s.db")
-    db.log_event(conn, "a", "download_ok", {"size": 5})
-    row = conn.execute("SELECT event, detail FROM track_events").fetchone()
-    assert row["event"] == "download_ok" and '"size": 5' in row["detail"]
-
-
 def test_extract_source_meta():
     m = extract_source_meta({"title": "T", "channel": "C", "duration": 200, "description": "d" * 9000,
                              "tags": ["a"], "artists": ["X", "Y"], "album": "Al", "release_year": 2020})
@@ -60,3 +54,60 @@ def test_file_facts_on_real_file(tmp_path):
     assert facts["file_ext"] == "m4a" and facts["file_size_bytes"] == f.stat().st_size
     assert len(facts["sha256"]) == 64 and facts["probe_codec"] == "aac"
     assert abs(facts["duration_drift_s"]) < 0.5
+
+
+def test_the_player_built_event_becomes_a_column_and_the_history_tables_are_dropped(tmp_path):
+    import sqlite3
+    idx = next(i for i, s in enumerate(db.MIGRATIONS) if "player_built_at" in s)
+    conn = sqlite3.connect(tmp_path / "old.db")
+    conn.row_factory = sqlite3.Row
+    for script in db.MIGRATIONS[:idx]:
+        conn.executescript(script)
+    conn.execute(f"PRAGMA user_version = {idx}")
+    conn.execute("INSERT INTO tracks (video_id, status) VALUES ('a', 'downloaded'), ('b', 'downloaded')")
+    conn.execute("INSERT INTO track_events (video_id, at, event) VALUES ('a', '2026-11-01T10:00:00', 'player_built'), "
+                 "('a', '2026-11-02T10:00:00', 'player_built'), ('a', '2026-11-03T10:00:00', 'download_ok')")
+    conn.commit()
+    conn.close()
+    new = db.connect(tmp_path / "old.db")
+    built = {r["video_id"]: r["player_built_at"] for r in new.execute("SELECT video_id, player_built_at FROM tracks")}
+    assert built == {"a": "2026-11-02T10:00:00", "b": None}                # the latest build time survives
+    tables = {r["name"] for r in new.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert not ({"track_events", "runs"} & tables)
+
+
+def test_a_database_that_already_ran_the_previous_migrations_still_drops_the_candidates_table(tmp_path):
+    """Migrations are append-only: a database already past a version never re-runs it, so each change is its own step."""
+    import sqlite3
+    idx = next(i for i, s in enumerate(db.MIGRATIONS) if "DROP TABLE metadata_candidates" in s)
+    conn = sqlite3.connect(tmp_path / "old.db")
+    for script in db.MIGRATIONS[:idx]:
+        conn.executescript(script)
+    conn.execute(f"PRAGMA user_version = {idx}")
+    conn.commit()
+    conn.close()
+    tables = {r["name"] for r in db.connect(tmp_path / "old.db").execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "metadata_candidates" not in tables and idx < len(db.MIGRATIONS)
+
+
+def test_a_pending_migration_first_keeps_a_copy_of_the_database_as_it_was(tmp_path):
+    import sqlite3
+    path = tmp_path / "state.db"
+    conn = sqlite3.connect(path)
+    for script in db.MIGRATIONS[:-1]:
+        conn.executescript(script)
+    conn.execute(f"PRAGMA user_version = {len(db.MIGRATIONS) - 1}")
+    conn.execute("INSERT INTO playlists (id, title, url) VALUES ('P', 'Keep me', 'u')")
+    conn.commit()
+    conn.close()
+    db.connect(path).close()
+    backup = sqlite3.connect(tmp_path / "state.db.pre-migration")
+    assert backup.execute("PRAGMA user_version").fetchone()[0] == len(db.MIGRATIONS) - 1      # as it was before
+    assert backup.execute("SELECT title FROM playlists").fetchone()[0] == "Keep me"
+    backup.close()
+
+
+def test_no_backup_for_a_new_or_current_database(tmp_path):
+    db.connect(tmp_path / "a.db").close()                 # brand new
+    db.connect(tmp_path / "a.db").close()                 # already current
+    assert not (tmp_path / "a.db.pre-migration").exists()

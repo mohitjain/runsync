@@ -49,7 +49,7 @@ class World:
         return {"path": path, "itag": "141", "codec": "mp4a.40.2", "bitrate": 258.0, "columns": cols}
 
     def run(self, **kw):
-        return sync.run_sync(self.cfg, self.conn, None, log=lambda m: None, sleep=self.sleeps.append, **kw)
+        return sync.run_sync(self.cfg, self.conn, None, sleep=self.sleeps.append, **kw)
 
     def status(self, vid):
         row = self.conn.execute("SELECT status FROM tracks WHERE video_id = ?", (vid,)).fetchone()
@@ -241,16 +241,129 @@ def test_result_dict_has_the_facts_the_skills_present(world):
     assert t0["bytes"] > 0 and t0["seconds"] == 0
 
 
-def test_a_merged_duplicate_that_left_the_playlist_is_not_removed_and_not_counted_by_the_guard(world):
-    """YouTube cleanup takes losing uploads out of the playlists; that must not trash them or trip the mass-delete guard."""
+def test_a_merged_duplicate_that_left_the_playlist_is_forgotten_not_trashed_and_not_counted_by_the_guard(world):
+    """YouTube cleanup takes losing uploads out of the playlists: their rows go, nothing is trashed, the guard is not tripped."""
     world.add_playlist("P", ids(10))
     world.run()
     world.conn.execute("UPDATE tracks SET status = 'merged', master_path = NULL WHERE video_id IN ('t0', 't1', 't2')")
+    world.conn.execute("INSERT INTO aliases (video_id, winner_id, merged_at) VALUES ('t0', 't5', 'x'), ('t1', 't5', 'x')")
+    world.conn.execute("INSERT INTO dedupe_decisions (a, b, same, decided_at) VALUES ('t0', 't5', 1, 'x')")
     world.conn.commit()
     world.playlists["P"] = ids(10)[3:]          # the three merged ones are gone from the playlist
     res = world.run()
     assert not res.aborted and res.removed == []
-    assert [world.status(v) for v in ("t0", "t1", "t2")] == ["merged"] * 3 and world.status("t5") == "downloaded"
-    world.playlists["P"] = ids(10)[4:]          # a real removal still trashes (only t3 here)
+    assert [world.status(v) for v in ("t0", "t1", "t2")] == [None] * 3 and world.status("t5") == "downloaded"
+    assert world.conn.execute("SELECT COUNT(*) FROM aliases").fetchone()[0] == 0          # nothing about them is kept
+    assert world.conn.execute("SELECT COUNT(*) FROM dedupe_decisions").fetchone()[0] == 0
+    world.playlists["P"] = ids(10)[4:]          # a real removal still goes to the trash (only t3 here)
     res = world.run()
     assert res.removed == ["t3"] and world.status("t3") == "trashed"
+
+
+def test_unavailable_songs_stay_while_youtube_lists_them_and_go_when_it_does_not(world):
+    world.add_playlist("P", ids(4))
+    world.run()
+    world.conn.execute("UPDATE tracks SET status = 'unavailable', master_path = NULL WHERE video_id IN ('t0', 't1')")
+    world.conn.execute("INSERT INTO replacement_picks (lost_id, pick_id, title, status, decided_at) VALUES "
+                       "('t0', 'zz', 'x', 'picked', 'now'), ('t1', NULL, NULL, 'skipped', 'now')")
+    world.conn.commit()
+    world.run()                                  # YouTube still lists both: they stay, with the owner's answers
+    assert [world.status(v) for v in ("t0", "t1")] == ["unavailable"] * 2
+    assert world.conn.execute("SELECT COUNT(*) FROM replacement_picks").fetchone()[0] == 2
+    world.playlists["P"] = ["t2", "t3"]           # the dead entries were removed from the playlist
+    world.run()
+    assert [world.status(v) for v in ("t0", "t1")] == [None, None]
+    assert world.conn.execute("SELECT COUNT(*) FROM replacement_picks").fetchone()[0] == 0
+
+
+def test_a_failed_fetch_forgets_nothing(world):
+    world.add_playlist("P", ids(3))
+    world.add_playlist("Q", ids(2, "q"))
+    world.run()
+    world.conn.execute("UPDATE tracks SET status = 'unavailable', master_path = NULL WHERE video_id = 't0'")
+    world.conn.execute("INSERT INTO youtube_runs (started_at, status) VALUES ('x', 'done')")
+    world.conn.commit()
+    world.playlists["P"] = ["t1", "t2"]
+    world.playlists["Q"] = RuntimeError("network down")      # one playlist could not be read: YouTube is not confirmed
+    world.run()
+    assert world.status("t0") == "unavailable"                # not forgotten on a partial picture
+    assert world.conn.execute("SELECT COUNT(*) FROM youtube_runs").fetchone()[0] == 1
+
+
+def test_a_completed_sync_forgets_the_undo_note_and_old_quota_days(world):
+    world.add_playlist("P", ids(2))
+    world.conn.execute("INSERT INTO youtube_runs (id, started_at, status) VALUES (1, 'x', 'done')")
+    world.conn.execute("INSERT INTO youtube_journal (run_id, op, playlist_id, video_id) VALUES (1, 'delete', 'P', 'v')")
+    world.conn.execute("INSERT INTO api_usage (day, units) VALUES ('2020-01-01', 900)")
+    world.conn.commit()
+    world.run()
+    for table in ("youtube_journal", "youtube_runs", "api_usage"):
+        assert world.conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+# ---- the sync command (JSON the skills read) ------------------------------------------------------------------------------
+
+def _cli_sync(world, monkeypatch, *args):
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from runsync import cli
+    monkeypatch.setenv("RUNSYNC_HOME", str(world.cfg.library))
+    (world.cfg.library / "config.yaml").write_text("pause_seconds: 0\n")
+    out = CliRunner().invoke(cli.app, ["sync", "--json", *args])
+    return out, _json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_the_sync_command_dry_run_reports_the_queue_without_writing(world, monkeypatch):
+    world.add_playlist("P", ids(3))
+    out, facts = _cli_sync(world, monkeypatch, "--dry-run")
+    assert out.exit_code == 0 and facts["dry_run"] is True and facts["queue_total"] == 3 and facts["added"] == 3
+    assert world.status("t0") is None and world.downloads == []                 # nothing was written or downloaded
+
+
+def test_the_sync_command_downloads_up_to_the_limit_and_says_what_is_left(world, monkeypatch):
+    world.add_playlist("P", ids(3))
+    out, facts = _cli_sync(world, monkeypatch, "-n", "2")
+    assert out.exit_code == 0 and facts["added"] == 2 and facts["queued_left"] == 1 and facts["dry_run"] is False
+    assert [t["id"] for t in facts["tracks"]] == ["t0", "t1"] and facts["tracks"][0]["quality"] == "high"
+
+
+def test_the_sync_command_exits_2_when_it_aborts(world, monkeypatch):
+    world.conn.execute("DELETE FROM playlists")
+    world.conn.commit()
+    out, facts = _cli_sync(world, monkeypatch)
+    assert out.exit_code == 2 and "no playlists selected" in facts["aborted"]
+
+
+def test_the_result_names_the_playlists_it_could_not_read(world):
+    world.add_playlist("P", ids(2))
+    world.add_playlist("Q", ids(1, "q"))
+    world.playlists["Q"] = RuntimeError("The playlist does not exist.\nmore detail")
+    res = world.run()
+    assert res.unreadable_playlists == [{"title": "Q", "reason": "The playlist does not exist."}]
+    assert res.to_dict()["unreadable_playlists"] == res.unreadable_playlists
+    assert world.run().unreadable_playlists != []                                   # and it keeps saying so
+    world.playlists["Q"] = ids(1, "q")
+    assert world.run().unreadable_playlists == []
+
+
+def test_a_trashed_track_takes_its_own_player_copy_with_it_but_never_a_foreign_file(world, monkeypatch):
+    monkeypatch.setattr(sync, "read_video_id", lambda path: path.stem)        # a copy's own tag: here, its file name
+    world.add_playlist("P", ids(12))
+    world.run()
+    copy = world.cfg.player / "m4a"
+    copy.mkdir(parents=True)
+    ours, foreign = copy / "t0.m4a", copy / "Other.m4a"
+    ours.write_bytes(b"our copy")
+    foreign.write_bytes(b"someone else's file")
+    world.conn.execute("UPDATE tracks SET player_path = ?, clean_filename = 't0.m4a', player_format = 'm4a' WHERE video_id = 't0'",
+                       (str(ours),))
+    world.conn.execute("UPDATE tracks SET player_path = ? WHERE video_id = 't1'", (str(foreign),))     # not t1's own file
+    world.conn.commit()
+    world.playlists["P"] = ids(12)[2:]                                       # t0 and t1 leave (2 of 12: under the guard)
+    res = world.run()
+    assert sorted(res.removed) == ["t0", "t1"]
+    assert not ours.exists() and foreign.exists()                            # ours is gone, the foreign file untouched
+    row = world.conn.execute("SELECT player_path, clean_filename FROM tracks WHERE video_id = 't0'").fetchone()
+    assert (row["player_path"], row["clean_filename"]) == (None, None)

@@ -343,19 +343,19 @@ def test_account_playlists_through_the_api_keep_the_special_ones(monkeypatch):
 
 
 def test_merge_remote_prefers_the_api_and_falls_back_to_cookies(conn, monkeypatch):
-    from runsync import cli, fetch
+    from runsync import fetch, playlist_select
     monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1}])
     monkeypatch.setattr(fetch, "fetch_account_playlists",
                         lambda c: [fetch.PlaylistInfo("PLc", "From cookies", "https://www.youtube.com/playlist?list=PLc")])
-    assert cli._merge_remote(conn, None, api=object()) == "api"
+    assert playlist_select.refresh_account_playlists(conn, None, api=object()).source == "api"
     assert {r[0] for r in conn.execute("SELECT id FROM playlists")} >= {"PL1", "LM"}
 
     def boom(api):
         raise AuthError("login expired")
     monkeypatch.setattr(yt, "my_playlists", boom)
-    assert cli._merge_remote(conn, object(), api=object()) == "cookies"
+    assert playlist_select.refresh_account_playlists(conn, object(), api=object()).source == "cookies"
     with pytest.raises(RuntimeError):
-        cli._merge_remote(conn, None, api=object())       # API down and no cookies: an error, never an empty list
+        playlist_select.refresh_account_playlists(conn, None, api=object())       # API down and no cookies: an error, never an empty list
 
 
 def test_adding_at_a_position_falls_back_when_the_playlist_is_sorted_automatically(files):
@@ -377,3 +377,46 @@ def test_the_quota_message_counts_the_hours_to_the_next_midnight_pacific():
     assert yt.hours_until_reset(noon) == "in about 12 h"
     summer = datetime(2026, 7, 12, 23, 0, tzinfo=PACIFIC).timestamp()
     assert yt.hours_until_reset(summer) == "in about 1 h"
+
+
+def test_status_facts_describe_the_library(conn, tmp_path):
+    from runsync import status
+    from runsync.config import Config
+    conn.execute("INSERT INTO tracks (video_id, status) VALUES ('a', 'downloaded'), ('b', 'pending'), ('c', 'unavailable')")
+    conn.commit()
+    f = status.facts(Config(library=tmp_path), conn)
+    assert (f["state"], f["activity"], f["downloaded"], f["queued"], f["total"], f["unavailable"], f["untagged"]) == (
+        "stopped", "idle", 1, 1, 2, 1, 1)
+    conn.execute("UPDATE tracks SET status = 'downloaded' WHERE video_id = 'b'")
+    assert status.facts(Config(library=tmp_path), conn)["state"] == "done"
+
+
+def test_a_malformed_pick_is_refused_before_anything_is_saved(tmp_path, monkeypatch):
+    import json as _json
+
+    from typer.testing import CliRunner
+
+    from runsync import cli
+    monkeypatch.setenv("RUNSYNC_HOME", str(tmp_path / "lib"))
+    out = CliRunner().invoke(cli.app, ["youtube", "--pick", "no-colon", "--json"])
+    assert out.exit_code == 2 and "LOSTID:UPLOADID" in _json.loads(out.stdout)["error"]
+
+
+def test_the_transport_never_follows_a_redirect_so_the_token_stays_with_the_checked_host():
+    import urllib.request
+    handler = yt._NoRedirect()
+    req = urllib.request.Request("https://www.googleapis.com/youtube/v3/playlists", headers={"Authorization": "Bearer X"})
+    assert handler.redirect_request(req, None, 302, "Found", {}, "https://evil.example/steal") is None
+
+
+def test_a_synced_playlist_that_no_longer_exists_on_youtube_is_reported_not_hidden(conn, monkeypatch):
+    from runsync import fetch, playlist_select
+    conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES ('PLgone', 'rerunsync', 'u', 'account', 1)")
+    conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES ('PLold', 'Old unsynced', 'u', 'account', 0)")
+    conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES ('PLurl', 'By link', 'u', 'url', 1)")
+    monkeypatch.setattr(yt, "my_playlists", lambda api: [{"id": "PL1", "title": "Running", "count": 1}])
+    out = playlist_select.refresh_account_playlists(conn, None, api=object())
+    assert out.gone == [{"id": "PLgone", "title": "rerunsync"}]               # a link playlist and an unsynced one are not it
+    assert not conn.execute("SELECT 1 FROM playlists WHERE id = 'PLold'").fetchone()   # the unsynced vanished one is dropped
+    assert conn.execute("SELECT selected FROM playlists WHERE id = 'PLgone'").fetchone()[0] == 1   # left for the owner to decide
+    assert fetch.API_UNREADABLE == {"LM", "WL"}

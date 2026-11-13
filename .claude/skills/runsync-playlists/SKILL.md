@@ -13,7 +13,7 @@ Keep this short and visual. The user answers with numbers or names; you do the r
 uv run runsync playlists --json
 ```
 
-It returns `{"live": bool, "problem": str, "playlists": [{n, title, synced, tracks}]}`. Do not paste it. Present a
+It returns `{"live": bool, "problem": str, "source": "api"|"cookies", "gone": [{id, title}], "playlists": [{n, title, synced, tracks}]}`. Do not paste it. Present a
 markdown table, ✅ for syncing and ⬜ for not, tracks right-aligned, "-" when unknown:
 
 | # | | Playlist | Tracks |
@@ -21,9 +21,12 @@ markdown table, ✅ for syncing and ⬜ for not, tracks right-aligned, "-" when 
 | 1 | ✅ | Liked Music | 373 |
 | 2 | ⬜ | Liked videos | - |
 
-Headline above it: "**Your playlists** · 3 of 5 syncing". If `live` is false, put "⚠️ Not refreshed: the cookies
-were rejected, so this is the saved list" above the table, send the user to the cookie steps of `runsync-setup`, and
-continue only if they agree.
+Headline above it: "**Your playlists** · 3 of 5 syncing". If `live` is false, put "⚠️ Not refreshed: neither the YouTube
+login nor the cookies worked, so this is the saved list" above the table, send the user to the cookie steps (or the
+YouTube login) of `runsync-setup`, and continue only if they agree.
+
+`gone` lists playlists you sync that were deleted on YouTube. Every sync would fail on them (and then skip all removals), so
+put a ⚠️ row under the table for each ("rerunsync no longer exists on YouTube") and offer it first in the STOP question.
 
 ## 2. Ask with the AskUserQuestion tool (never as plain text)
 

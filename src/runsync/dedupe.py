@@ -16,14 +16,14 @@ import sqlite3
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import Config
-from .db import log_event, update_track
+from .db import update_track
 from .diff import MassDeleteError
 from .player import read_video_id
 from .resolve.parse import channel_name, is_label, key
+from .util import now_iso
 
 log = logging.getLogger("runsync.dedupe")
 
@@ -171,6 +171,60 @@ def _decision(conn: sqlite3.Connection, a: str, b: str) -> bool | None:
     return None if row is None else bool(row["same"])
 
 
+class _Union:
+    """Which uploads are the same song (union-find over video ids)."""
+
+    def __init__(self, ids) -> None:
+        self.parent = {v: v for v in ids}
+
+    def find(self, v: str) -> str:
+        while self.parent[v] != v:
+            self.parent[v] = self.parent[self.parent[v]]
+            v = self.parent[v]
+        return v
+
+    def join(self, a: str, b: str) -> None:
+        self.parent[self.find(a)] = self.find(b)
+
+
+def _plan_bucket(conn: sqlite3.Connection, items: list[tuple[Member, str | None]], paths: dict[str, Path],
+                 fp_fn: Callable[[str, Path, str | None], list[int] | None], plan: Plan) -> None:
+    """Uploads that share a title: decide which are the same recording (known answers first, then the audio)."""
+    ms = {m.video_id: m for m, _ in items}
+    sha = {m.video_id: s for m, s in items}
+    same = _Union(ms)
+    ids = sorted(ms)
+    undecided: list[tuple[str, str]] = []
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            if not _related(ms[a], ms[b]):
+                continue
+            d = _decision(conn, a, b)
+            if d is None and (ms[a].markers | ms[b].markers) & IGNORED_MARKERS:
+                d = True        # live / remastered version of the same song
+            if d is True:
+                same.join(a, b)
+            elif d is None:
+                undecided.append((a, b))
+    sims: dict[tuple[str, str], float | None] = {}
+    for a, b in undecided:
+        fa, fb = fp_fn(a, paths[a], sha[a]), fp_fn(b, paths[b], sha[b])
+        sims[(a, b)] = similarity(fa, fb) if fa and fb else None
+        if sims[(a, b)] is not None and sims[(a, b)] >= SAME_AT:
+            same.join(a, b)
+    comps: dict[str, list[str]] = {}
+    for v in ids:
+        comps.setdefault(same.find(v), []).append(v)
+    for members in comps.values():
+        if len(members) > 1:
+            winner = max((ms[v] for v in members), key=Member.rank)
+            plan.groups.append(Group(winner, [(ms[v], sims.get(tuple(sorted((v, winner.video_id)))))
+                                              for v in members if v != winner.video_id]))
+    for (a, b), s in sims.items():
+        if same.find(a) != same.find(b) and (s is None or s < SAME_AT):
+            plan.unsure.append(Unsure(ms[a], ms[b], s))   # same title and artist but unclear audio: the owner decides
+
+
 def build_plan(conn: sqlite3.Connection, fp_fn: Callable[[str, Path, str | None], list[int] | None] | None = None
                ) -> Plan:
     """Read-only apart from the fingerprint cache. fp_fn(video_id, path, sha) is injectable for tests."""
@@ -180,57 +234,10 @@ def build_plan(conn: sqlite3.Connection, fp_fn: Callable[[str, Path, str | None]
     buckets: dict[str, list[tuple[Member, str | None]]] = {}
     for m, sha, ident in _members(conn):
         buckets.setdefault(ident, []).append((m, sha))
-
     plan = Plan()
     for items in buckets.values():
-        if len(items) < 2:
-            continue
-        ms = {m.video_id: m for m, _ in items}
-        sha = {m.video_id: s for m, s in items}
-        parent = {v: v for v in ms}
-
-        def find(v: str, parent=parent) -> str:
-            while parent[v] != v:
-                parent[v] = parent[parent[v]]
-                v = parent[v]
-            return v
-
-        sims: dict[tuple[str, str], float | None] = {}
-        undecided: list[tuple[str, str]] = []
-        ids = sorted(ms)
-        for i, a in enumerate(ids):
-            for b in ids[i + 1:]:
-                if not _related(ms[a], ms[b]):
-                    continue
-                d = _decision(conn, a, b)
-                if d is None and (ms[a].markers | ms[b].markers) & IGNORED_MARKERS:
-                    d = True        # live / remastered version of the same song
-                if d is True:
-                    parent[find(a)] = find(b)
-                elif d is None:
-                    undecided.append((a, b))
-        for a, b in undecided:
-            fa, fb = fp_fn(a, paths[a], sha[a]), fp_fn(b, paths[b], sha[b])
-            s = similarity(fa, fb) if fa and fb else None
-            sims[(a, b)] = s
-            if s is not None and s >= SAME_AT:
-                parent[find(a)] = find(b)
-        comps: dict[str, list[str]] = {}
-        for v in ids:
-            comps.setdefault(find(v), []).append(v)
-        for members in comps.values():
-            if len(members) > 1:
-                winner = max((ms[v] for v in members), key=Member.rank)
-                g = Group(winner)
-                for v in members:
-                    if v != winner.video_id:
-                        g.losers.append((ms[v], sims.get(tuple(sorted((v, winner.video_id))))))
-                plan.groups.append(g)
-        for (a, b), s in sims.items():
-            if find(a) == find(b):
-                continue
-            if s is None or s < SAME_AT:   # same title and artist but unclear audio: the owner decides, never silently kept
-                plan.unsure.append(Unsure(ms[a], ms[b], s))
+        if len(items) > 1:
+            _plan_bucket(conn, items, paths, fp_fn, plan)
     plan.groups.sort(key=lambda g: g.winner.label().casefold())
     return plan
 
@@ -259,7 +266,7 @@ def record_decision(conn: sqlite3.Connection, a: str, b: str, same: bool) -> Non
         if not conn.execute("SELECT 1 FROM tracks WHERE video_id = ?", (v,)).fetchone():
             raise ValueError(f"no track {v}")
     conn.execute("INSERT OR REPLACE INTO dedupe_decisions (a, b, same, decided_at) VALUES (?,?,?,?)",
-                 (x, y, int(same), datetime.now(UTC).isoformat(timespec="microseconds")))
+                 (x, y, int(same), now_iso(precise=True)))
     conn.commit()
 
 
@@ -269,7 +276,7 @@ def apply_plan(cfg: Config, conn: sqlite3.Connection, plan: Plan, force: bool = 
     if not force and total and plan.removals / total > cfg.mass_delete_threshold:
         raise MassDeleteError(f"{plan.removals} of {total} tracks ({plan.removals / total:.0%}) would be removed; "
                               f"over the {cfg.mass_delete_threshold:.0%} guard. Re-run with --force after checking.")
-    now = datetime.now(UTC).isoformat(timespec="microseconds")
+    now = now_iso(precise=True)
     removed = 0
     for g in plan.groups:
         for m, sim in g.losers:
@@ -291,7 +298,6 @@ def apply_plan(cfg: Config, conn: sqlite3.Connection, plan: Plan, force: bool = 
                                                 "same recording" if sim is not None else "same song (your answer, or a live/"
                                                 "remaster version)", now))
             conn.execute("DELETE FROM fingerprints WHERE video_id = ?", (m.video_id,))
-            log_event(conn, m.video_id, "merged", {"into": g.winner.video_id, "similarity": sim})
             log.info("merged %s into %s (similarity %s)", m.video_id, g.winner.video_id, sim)
             removed += 1
     conn.commit()
@@ -302,16 +308,20 @@ def undo(conn: sqlite3.Connection, video_id: str) -> str:
     """Bring a merged track back: it is queued for download again and will not be merged into that winner again."""
     row = conn.execute("SELECT winner_id FROM aliases WHERE video_id = ?", (video_id,)).fetchone()
     if not row:
-        raise ValueError(f"{video_id} is not a merged duplicate")
+        raise ValueError(f"{video_id} is not a merged duplicate (or the database already forgot it after the YouTube cleanup)")
     record_decision(conn, video_id, row["winner_id"], same=False)
     conn.execute("DELETE FROM aliases WHERE video_id = ?", (video_id,))
     update_track(conn, video_id, status="pending", attempts=0, last_error=None)
-    log_event(conn, video_id, "unmerged", {"was_into": row["winner_id"]})
     conn.commit()
     return row["winner_id"]
 
 
 def winner_of(conn: sqlite3.Connection, video_id: str) -> str:
-    """The track to use for this video id: itself, or the one that replaced it."""
-    row = conn.execute("SELECT winner_id FROM aliases WHERE video_id = ?", (video_id,)).fetchone()
-    return row["winner_id"] if row else video_id
+    """The track to use for this video id: itself, or the one that replaced it (follows chains, never loops)."""
+    seen = {video_id}
+    while True:
+        row = conn.execute("SELECT winner_id FROM aliases WHERE video_id = ?", (video_id,)).fetchone()
+        if not row or row["winner_id"] in seen:
+            return video_id
+        video_id = row["winner_id"]
+        seen.add(video_id)

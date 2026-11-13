@@ -1,8 +1,9 @@
 """Clean duplicates out of your YouTube playlists (the official API).
 
-Two kinds of clutter: the same video listed again and again (repeats), and the losing upload of a song that `dedupe`
-merged (a loser). Where the kept upload is missing from a playlist that holds a loser, the plan swaps: it adds the kept
-upload first and then removes the loser, so a song never silently vanishes from a playlist.
+Four kinds of clutter: the same video listed again and again (repeats), the losing upload of a song that `dedupe`
+merged (a loser), a song YouTube no longer serves (dead), and a dead song the owner picked a replacement for. Where the kept
+upload or the replacement is missing from a playlist, the plan adds it first and then removes the old entry, so a song never
+silently vanishes from a playlist. A dead song with no replacement is simply removed.
 
 Same pattern as dedupe and the card: `build_plan` only reads, `apply_plan` needs the id of the exact plan the owner
 confirmed, every change is journalled so `undo_last_run` can reverse it. Liked Music, Liked videos and Watch later are
@@ -17,17 +18,14 @@ import time
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
 
 from . import youtube as yt
+from .dedupe import winner_of
+from .util import now_iso
 
 NEVER_WRITE = {"LM", "LL", "WL"}      # the API cannot or must not touch these: likes are your taste, not clutter
 WRITE_COST = yt.COST["POST"]           # an insert and a delete both cost 50 units
 DEFAULT_BATCH = 100
-
-
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat()
 
 
 class PlanRefused(Exception):
@@ -36,7 +34,7 @@ class PlanRefused(Exception):
 
 @dataclass(frozen=True)
 class Op:
-    kind: str            # "add" | "delete"
+    kind: str            # "add" | "delete" | "create"
     playlist_id: str
     video_id: str
     item_id: str         # the playlist entry to delete ("" for an add)
@@ -72,20 +70,10 @@ def plan_id(plan: Plan) -> str:
     return hashlib.sha256("\n".join(lines).encode()).hexdigest()[:12]
 
 
-def resolve_winner(conn: sqlite3.Connection, video_id: str) -> str:
-    """The upload that stands for this video: itself, or the one that replaced it (follows chains, never loops)."""
-    seen = {video_id}
-    cur = video_id
-    while True:
-        row = conn.execute("SELECT winner_id FROM aliases WHERE video_id = ?", (cur,)).fetchone()
-        if not row or row["winner_id"] in seen:
-            return cur
-        cur = row["winner_id"]
-        seen.add(cur)
-
-
 def plan_playlist(pid: str, entries: list[yt.Entry], winner: Callable[[str], str],
-                  title_of: Callable[[str], str] = lambda v: "") -> list[Op]:
+                  title_of: Callable[[str], str] = lambda v: "", picks: dict[str, str] | None = None,
+                  dead: set[str] | None = None, unwanted: set[str] | None = None) -> list[Op]:
+    picks, dead, unwanted = picks or {}, dead or set(), unwanted or set()
     first: dict[str, yt.Entry] = {}
     repeats: list[yt.Entry] = []
     for e in entries:
@@ -98,6 +86,20 @@ def plan_playlist(pid: str, entries: list[yt.Entry], winner: Callable[[str], str
     deletes: list[Op] = []
     added: set[str] = set()
     for e in sorted(first.values(), key=lambda x: x.position):
+        if e.video_id in picks:                        # a dead song with a chosen replacement: put it in place
+            pick = picks[e.video_id]
+            if pick not in present and pick not in added:
+                adds.append(Op("add", pid, pick, "", e.position, "replace", title_of(pick), pick, title_of(pick)))
+                added.add(pick)
+            deletes.append(Op("delete", pid, e.video_id, e.item_id, e.position, "replace",
+                              title_of(e.video_id) or e.title, pick, title_of(pick)))
+            continue
+        if e.video_id in unwanted:                     # the owner wants this song gone
+            deletes.append(Op("delete", pid, e.video_id, e.item_id, e.position, "unwanted", title_of(e.video_id) or e.title))
+            continue
+        if e.video_id in dead or not e.available:      # dead and nothing to replace it with: delete it
+            deletes.append(Op("delete", pid, e.video_id, e.item_id, e.position, "dead", title_of(e.video_id) or e.title))
+            continue
         w = winner(e.video_id)
         if w == e.video_id:
             continue
@@ -111,21 +113,64 @@ def plan_playlist(pid: str, entries: list[yt.Entry], winner: Callable[[str], str
     return adds + deletes
 
 
-def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None) -> Plan:
-    """Read your owned, selected playlists live and work out what to clean. Writes nothing."""
+def build_plan(api: yt.Api, conn: sqlite3.Connection, only: set[str] | None = None, place_in: str | None = None,
+               mirror: Callable[[str, list[yt.Entry]], list[Op]] | None = None, library: str | None = None) -> Plan:
+    """Read your owned, selected playlists live and work out what to clean. Writes nothing. `place_in` is a playlist id:
+    replacements whose dead song is in none of your playlists (it lives in Liked Music) are added there. `mirror(pid,
+    entries)` returns the operations that keep the library list (`library`) matching Liked Music."""
     owned = {p["id"]: p["title"] for p in yt.my_playlists(api)}
     selected = {r["id"] for r in conn.execute("SELECT id FROM playlists WHERE selected = 1")}
     plan = Plan()
     titles = {r["video_id"]: r["title"] or "" for r in conn.execute("SELECT video_id, title FROM tracks")}
+    picks = {r["lost_id"]: r["pick_id"] for r in conn.execute(
+        "SELECT lost_id, pick_id FROM replacement_picks WHERE status = 'picked' AND pick_id IS NOT NULL")}
+    titles.update({r["pick_id"]: r["title"] or "" for r in conn.execute(
+        "SELECT pick_id, title FROM replacement_picks WHERE pick_id IS NOT NULL")})
+    dead = {r["video_id"] for r in conn.execute("SELECT video_id FROM tracks WHERE status = 'unavailable'")} - set(picks)
+    unwanted = {r["video_id"] for r in conn.execute("SELECT video_id FROM excluded")}
+    present: dict[str, set[str]] = {}
     for pid, title in owned.items():
         if pid in NEVER_WRITE or pid not in selected or (only is not None and pid not in only):
             continue
         plan.playlists[pid] = title
         live = yt.playlist_entries(api, pid)
         plan.counts[pid] = len(live)
-        plan.ops += plan_playlist(pid, live, lambda v: resolve_winner(conn, v), lambda v: titles.get(v, ""))
+        present[pid] = {e.video_id for e in live}
+        plan.ops += plan_playlist(pid, live, lambda v: winner_of(conn, v), lambda v: titles.get(v, ""), picks, dead, unwanted)
+        if mirror and pid == library:
+            plan.ops += mirror(pid, live)
+    _place_replacements(plan, picks, titles, present, place_in)
+    plan.ops = _without_repeats(plan.ops)
     plan.ops.sort(key=lambda o: o.kind != "add")           # every add before any delete; sort is stable
     return plan
+
+
+def _without_repeats(ops: list[Op]) -> list[Op]:
+    """The same entry may be wanted gone for two reasons (repeat and unliked): delete it once."""
+    seen: set[tuple] = set()
+    out = []
+    for o in ops:
+        key = (o.kind, o.playlist_id, o.item_id or o.video_id)
+        if key not in seen:
+            seen.add(key)
+            out.append(o)
+    return out
+
+
+def _place_replacements(plan: Plan, picks: dict[str, str], titles: dict[str, str], present: dict[str, set[str]],
+                        place_in: str | None) -> set[str]:
+    """Add the chosen replacements whose dead song is in none of your playlists to `place_in`. Returns the lost ids placed."""
+    if not place_in:
+        return set()
+    if place_in not in present:
+        raise NoSuchPlaylist("The playlist for replacements is not one of your synced playlists.")
+    in_place = {o.video_id for o in plan.ops if o.kind == "delete" and o.why == "replace"}
+    waiting = {lost: pick for lost, pick in picks.items() if lost not in in_place}
+    for pick in dict.fromkeys(waiting.values()):
+        if pick not in present[place_in] and not any(o.kind == "add" and o.video_id == pick and o.playlist_id == place_in
+                                                    for o in plan.ops):
+            plan.ops.append(Op("add", place_in, pick, "", 0, "replace", titles.get(pick, ""), pick, titles.get(pick, "")))
+    return set(waiting)
 
 
 class NoSuchPlaylist(Exception):
@@ -178,9 +223,12 @@ def summary(plan: Plan) -> dict:
     for pid, title in plan.playlists.items():
         mine = [o for o in plan.ops if o.playlist_id == pid]
         per[pid] = {"id": pid, "title": title, "repeats": sum(o.why == "repeat" for o in mine),
-                    "losers": sum(o.why == "loser" for o in mine), "swaps": sum(o.why == "swap" and o.kind == "add" for o in mine)}
+                    "losers": sum(o.why == "loser" for o in mine), "swaps": sum(o.why == "swap" and o.kind == "add" for o in mine),
+                    "dead": sum(o.why == "dead" for o in mine), "unwanted": sum(o.why == "unwanted" and o.kind == "delete" for o in mine),
+                    "replaced": sum(o.why == "replace" and o.kind == "delete" for o in mine)}
     return {"plan_id": plan_id(plan), "playlists": list(per.values()), "ops": len(plan.ops), "adds": plan.adds,
-            "deletes": plan.deletes, "cost": plan.cost}
+            "deletes": plan.deletes, "cost": plan.cost,
+            "mirror_adds": sum(o.why == "mirror" for o in plan.ops), "mirror_removes": sum(o.why == "unliked" for o in plan.ops)}
 
 
 def days_needed(plan: Plan, budget: int) -> int:
@@ -201,12 +249,44 @@ class Applied:
     ops_done: list[Op] = field(default_factory=list)       # what really happened, with real playlist ids
     before: dict[str, int] = field(default_factory=dict)   # entries per playlist before the run
     playlists: dict[str, str] = field(default_factory=dict)
+    live: dict[str, list[yt.Entry]] = field(default_factory=dict)   # the playlists as read back after the writes
 
 
 def _journal(conn: sqlite3.Connection, run_id: int, op: str, o: Op, item_id: str) -> None:
     conn.execute("INSERT INTO youtube_journal (run_id, op, playlist_id, video_id, playlist_item_id, position) "
                  "VALUES (?, ?, ?, ?, ?, ?)", (run_id, op, o.playlist_id, o.video_id, item_id, o.position))
     conn.commit()
+
+
+def _select_playlist(conn: sqlite3.Connection, playlist_id: str, title: str) -> None:
+    """A playlist made here is synced from now on."""
+    conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES (?, ?, ?, 'account', 1) "
+                 "ON CONFLICT(id) DO UPDATE SET selected = 1",
+                 (playlist_id, title, f"https://www.youtube.com/playlist?list={playlist_id}"))
+    conn.commit()
+
+
+def _execute(api: yt.Api, conn: sqlite3.Connection, run_id: int, o: Op, made: dict[str, str], out: Applied) -> None:
+    """Make one change on YouTube and note it in the journal."""
+    if o.playlist_id in made:
+        o = replace(o, playlist_id=made[o.playlist_id])
+    if o.kind == "create":
+        real = yt.create_playlist(api, o.title)
+        made[o.playlist_id] = real
+        o = replace(o, playlist_id=real)
+        out.before[real], out.playlists[real] = 0, o.title
+        _journal(conn, run_id, "create", o, "")
+        _select_playlist(conn, real, o.title)
+        out.created += 1
+    elif o.kind == "add":
+        _journal(conn, run_id, "add", o, yt.add_entry(api, o.playlist_id, o.video_id, position=o.position or None))
+        out.added += 1
+    else:
+        yt.delete_entry(api, o.item_id)
+        _journal(conn, run_id, "delete", o, o.item_id)
+        out.deleted += 1
+    out.ops_done.append(o)
+    out.done += 1
 
 
 def apply_plan(api: yt.Api, conn: sqlite3.Connection, plan: Plan, confirm: str, batch: int = DEFAULT_BATCH) -> Applied:
@@ -220,47 +300,21 @@ def apply_plan(api: yt.Api, conn: sqlite3.Connection, plan: Plan, confirm: str, 
                           (now_iso(), plan_id(plan))).lastrowid
     conn.commit()
     out = Applied(run_id=run_id, before=dict(plan.counts), playlists=dict(plan.playlists))
-    todo = plan.ops[:max(0, batch)]
-    status = "done"
+    made: dict[str, str] = {}
+    status = "interrupted"            # what the run is recorded as if something unexpected ends it
     try:
-        made: dict[str, str] = {}
-        for o in todo:
+        for o in plan.ops[:max(0, batch)]:
             if not api.can_spend(WRITE_COST):
                 out.stopped = f"daily quota budget reached ({api.budget} units); the rest waits for tomorrow"
                 break
-            if o.playlist_id in made:
-                o = replace(o, playlist_id=made[o.playlist_id])
-            if o.kind == "create":
-                real = yt.create_playlist(api, o.title)
-                made[o.playlist_id] = real
-                out.before[real], out.playlists[real] = 0, o.title
-                _journal(conn, run_id, "create", replace(o, playlist_id=real), "")
-                conn.execute("INSERT INTO playlists (id, title, url, kind, selected) VALUES (?, ?, ?, 'account', 1) "
-                             "ON CONFLICT(id) DO UPDATE SET selected = 1",
-                             (real, o.title, f"https://www.youtube.com/playlist?list={real}"))
-                conn.commit()
-                out.created += 1
-                out.ops_done.append(replace(o, playlist_id=real))
-                out.done += 1
-                continue
-            if o.kind == "add":
-                new_id = yt.add_entry(api, o.playlist_id, o.video_id, position=o.position or None)
-                _journal(conn, run_id, "add", o, new_id)
-                out.added += 1
-            else:
-                yt.delete_entry(api, o.item_id)
-                _journal(conn, run_id, "delete", o, o.item_id)
-                out.deleted += 1
-            out.ops_done.append(o)
-            out.done += 1
+            _execute(api, conn, run_id, o, made, out)
+        status = "stopped" if out.stopped else "done"
     except yt.YouTubeError as exc:
-        out.stopped = str(exc)
-        status = "stopped"
-    out.left = len(plan.ops) - out.done
-    if out.stopped:
-        status = "stopped"
-    conn.execute("UPDATE youtube_runs SET status = ?, finished_at = ? WHERE id = ?", (status, now_iso(), run_id))
-    conn.commit()
+        out.stopped, status = str(exc), "stopped"
+    finally:
+        out.left = len(plan.ops) - out.done
+        conn.execute("UPDATE youtube_runs SET status = ?, finished_at = ? WHERE id = ?", (status, now_iso(), run_id))
+        conn.commit()
     return out
 
 
@@ -277,7 +331,7 @@ def _problems(ops: list[Op], live: dict[str, list[yt.Entry]]) -> list[dict]:
         elif o.kind == "delete":
             if o.item_id in items[o.playlist_id]:
                 why = "the entry is still in the playlist"
-            elif o.why in ("loser", "swap") and o.keep_id not in videos[o.playlist_id]:
+            elif o.why in ("loser", "swap", "replace") and o.keep_id not in videos[o.playlist_id]:
                 why = "the kept upload is missing from the playlist"
             elif o.why == "repeat" and videos[o.playlist_id][o.video_id] < 1:
                 why = "no copy of the song is left in the playlist"
@@ -309,6 +363,7 @@ def verify(api: yt.Api, applied: Applied, waits: tuple[float, ...] = (3, 8, 15),
         if (not problems and counts_ok) or attempt == len(waits):
             break
         (sleep or time.sleep)(waits[attempt])
+    applied.live = live
     rows = [{"id": pid, "title": applied.playlists.get(pid, pid), "before": applied.before.get(pid, 0),
              "after": len(live[pid]), "expected": expected[pid]} for pid in pids]
     return {"checked": True, "ok": not problems and counts_ok, "confirmed": len(ops) - len(problems),
@@ -316,7 +371,7 @@ def verify(api: yt.Api, applied: Applied, waits: tuple[float, ...] = (3, 8, 15),
 
 
 def last_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM youtube_runs WHERE status IN ('done', 'stopped') AND "
+    return conn.execute("SELECT * FROM youtube_runs WHERE status IN ('done', 'stopped', 'interrupted') AND "
                         "EXISTS (SELECT 1 FROM youtube_journal j WHERE j.run_id = youtube_runs.id) "
                         "ORDER BY id DESC LIMIT 1").fetchone()
 

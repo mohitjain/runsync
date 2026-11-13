@@ -1,7 +1,6 @@
 """Best-audio selection, download to .part, ffprobe integrity check, atomic move into master/."""
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -12,6 +11,7 @@ from pathlib import Path
 import yt_dlp
 
 from .logs import YtdlpLogger
+from .util import sha256_file
 
 log = logging.getLogger("runsync.download")
 
@@ -68,14 +68,6 @@ def probe_ok(path: Path) -> bool:
     return probe(path) is not None
 
 
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def extract_source_meta(info: dict) -> dict:
     """Pick the YouTube-side facts worth keeping, as tracks columns."""
     desc = info.get("description") or ""
@@ -122,24 +114,13 @@ def _extract(video_id: str, cookies: Path | None) -> tuple[dict, dict]:
     return base, info
 
 
-def probe_track(video_id: str, cookies: Path | None, near_tie_ratio: float = 0.10) -> dict:
-    """What would we download? No file is fetched. Returns tracks-column values plus est_bytes."""
-    _, info = _extract(video_id, cookies)
-    fmt = select_format(info.get("formats") or [], near_tie_ratio)
-    if fmt is None:
-        raise RuntimeError("no audio formats available")
-    est = fmt.get("filesize") or fmt.get("filesize_approx")
-    if not est and info.get("duration"):
-        est = int(fmt["abr"] * 1000 / 8 * info["duration"])
-    cols = {**extract_source_meta(info), "itag": str(fmt["format_id"]), "codec": fmt.get("acodec"),
-            "bitrate": fmt.get("abr"), "sample_rate": fmt.get("asr"), "channels": fmt.get("audio_channels"),
-            "container": fmt.get("ext"), "format_note": fmt.get("format_note"), "stream_size_approx": est,
+def _stream_columns(fmt: dict, info: dict, cookies: Path | None) -> dict:
+    """The chosen stream's facts, as tracks columns."""
+    return {"itag": str(fmt["format_id"]), "codec": fmt.get("acodec"), "bitrate": fmt.get("abr"),
+            "sample_rate": fmt.get("asr"), "channels": fmt.get("audio_channels"), "container": fmt.get("ext"),
+            "format_note": fmt.get("format_note"), "stream_size_approx": fmt.get("filesize") or fmt.get("filesize_approx"),
             "candidates_json": json.dumps(candidates_summary(info.get("formats") or [])),
             "used_cookies": int(bool(cookies)), "ytdlp_version": yt_dlp.version.__version__}
-    log.info("%s probe: format %s %s @ %sk ~%.1f MB", video_id, fmt["format_id"], fmt.get("acodec"), fmt["abr"],
-             (est or 0) / 1e6)
-    return {"columns": cols, "est_bytes": est or 0, "codec": fmt.get("acodec"), "bitrate": fmt["abr"],
-            "premium": fmt["abr"] >= 250}
 
 
 def download_best(video_id: str, master: Path, cookies: Path | None, near_tie_ratio: float = 0.10) -> dict:
@@ -177,15 +158,7 @@ def download_best(video_id: str, master: Path, cookies: Path | None, near_tie_ra
     if facts["duration_drift_s"] is not None and abs(facts["duration_drift_s"]) > 3:
         log.warning("%s duration drift %.1fs (file %.1fs vs YouTube %.1fs)", video_id, facts["duration_drift_s"],
                     facts["probe_duration_s"], info.get("duration"))
-    columns = {
-        **meta, **facts,
-        "itag": str(fmt["format_id"]), "codec": fmt.get("acodec"), "bitrate": fmt.get("abr"),
-        "sample_rate": fmt.get("asr"), "channels": fmt.get("audio_channels"), "container": fmt.get("ext"),
-        "format_note": fmt.get("format_note"),
-        "stream_size_approx": fmt.get("filesize") or fmt.get("filesize_approx"),
-        "candidates_json": json.dumps(candidates_summary(info.get("formats") or [])),
-        "used_cookies": int(bool(cookies)), "ytdlp_version": yt_dlp.version.__version__,
-        "master_path": str(dest), "download_seconds": seconds,
-    }
+    columns = {**meta, **facts, **_stream_columns(fmt, info, cookies), "master_path": str(dest),
+               "download_seconds": seconds}
     return {"path": dest, "itag": columns["itag"], "codec": columns["codec"], "bitrate": columns["bitrate"],
             "columns": columns}

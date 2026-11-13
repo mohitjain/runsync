@@ -91,3 +91,17 @@ def test_your_own_override_is_never_replaced_by_a_search(conn, tmp_path):
     fill(out, a={"suggested_artist": "Theirs", "confidence": "0.99", "evidence_url": "https://e.com"})
     assert import_enrich(out, conn) == (0, 0)
     assert load_overrides(conn)["tracks"]["a"]["artist"] == "Mine"
+
+
+def test_a_trashed_track_no_longer_asks_for_a_search_or_counts_as_needing_you(tmp_path):
+    from runsync import db, status
+    from runsync.config import Config
+    from runsync.resolve.enrich import export_enrich
+    conn = db.connect(tmp_path / "s.db")
+    for vid, st in (("live", "downloaded"), ("gone", "trashed")):
+        conn.execute("INSERT INTO tracks (video_id, status, original_title) VALUES (?, ?, 'T')", (vid, st))
+        conn.execute("INSERT INTO metadata (video_id, artist, title, needs_review, review_reason, confidence) "
+                     "VALUES (?, 'A', 'T', 1, 'low', 0.4)", (vid,))
+    conn.commit()
+    assert export_enrich(tmp_path / "enrich.csv", conn) == 1                       # only the live one
+    assert status.facts(Config(library=tmp_path), conn)["need_you"] == 1

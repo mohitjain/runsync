@@ -32,9 +32,11 @@ def export_enrich(path: Path, conn: sqlite3.Connection) -> int:
     sel = ("SELECT t.original_title, t.channel, t.yt_tags, t.description, m.* FROM metadata m "
            "JOIN tracks t USING (video_id) ")
     rows = [_row("track", r["video_id"], r, reason=r["review_reason"], tracks=1)
-            for r in conn.execute(sel + "WHERE m.needs_review = 1 ORDER BY m.confidence, m.video_id")]
+            for r in conn.execute(sel + "WHERE t.status = 'downloaded' AND m.needs_review = 1 "
+                                      "ORDER BY m.confidence, m.video_id")]
     seen: dict[str, dict] = {}
-    for r in conn.execute(sel + "WHERE m.needs_review = 0 AND m.language IS NULL AND m.artist IS NOT NULL "
+    for r in conn.execute(sel + "WHERE t.status = 'downloaded' AND m.needs_review = 0 AND m.language IS NULL "
+                          "AND m.artist IS NOT NULL "
                           "ORDER BY m.video_id"):
         lead = r["artist"].split(",")[0].strip()
         if key(lead) in seen:

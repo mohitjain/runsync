@@ -1,6 +1,6 @@
 ---
 name: runsync-add
-description: Add a song to one of the user's YouTube playlists from here - search YouTube, let the user pick the right upload, confirm, add. Use when the user says add this song to my playlist, put X in Running, add to rerunsync, or gives a song name or YouTube link to add.
+description: Add a song to one of the user's YouTube playlists from here - search YouTube, let the user pick the right upload, confirm, add. Use when the user says add this song to my playlist, put X in Running, or gives a song name or YouTube link to add.
 ---
 
 # runsync-add

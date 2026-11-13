@@ -21,25 +21,16 @@ import sqlite3
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from pathlib import Path
 
 from .dedupe import winner_of
 from .player import safe_filename
+from .util import now_iso, sha256_file
 
 log = logging.getLogger("runsync.card")
 
 TMP_SUFFIX = ".runsync-tmp"
 SPACE_MARGIN = 100 * 1024 * 1024    # keep this much free on the card
-JUNK = (".DS_Store", ".Spotlight-V100", ".fseventsd", ".Trashes", ".TemporaryItems", ".VolumeIcon.icns")
-
-
-def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="microseconds")
-
-
-def is_junk(name: str) -> bool:
-    return name in JUNK or name.startswith("._")
 
 
 # ---- volumes ----------------------------------------------------------------------------------------------------
@@ -105,7 +96,7 @@ def register_device(conn: sqlite3.Connection, info: VolumeInfo, name: str, libra
     if conn.execute("SELECT 1 FROM devices WHERE volume_uuid = ?", (info.uuid,)).fetchone():
         raise ValueError("this card is already registered")
     cur = conn.execute("INSERT INTO devices (name, volume_uuid, subpath, registered_at) VALUES (?,?,?,?)",
-                       (name, info.uuid, subpath, _now()))
+                       (name, info.uuid, subpath, now_iso(precise=True)))
     conn.commit()
     return cur.lastrowid
 
@@ -184,7 +175,7 @@ def wanted_tracks(conn: sqlite3.Connection) -> tuple[dict[str, Item], dict[str, 
         while pname in used:
             pname = pname.replace(".m3u8", f" ({p['id']}).m3u8")
         used.add(pname)
-        seen: list[str] = []
+        seen: dict[str, None] = {}      # ordered, no repeats
         for r in conn.execute("SELECT video_id FROM playlist_items WHERE playlist_id = ? ORDER BY position", (p["id"],)):
             vid = winner_of(conn, r["video_id"])
             t = conn.execute("SELECT t.player_path, m.artist, m.title, t.probe_duration_s FROM tracks t "
@@ -197,9 +188,8 @@ def wanted_tracks(conn: sqlite3.Connection) -> tuple[dict[str, Item], dict[str, 
                 st = src.stat()
                 items[src.name] = Item(vid, src.name, src, st.st_size, st.st_mtime_ns, int(t["probe_duration_s"] or 0),
                                        f"{t['artist'] or ''} - {t['title'] or ''}".strip(" -"))
-            if src.name not in seen:
-                seen.append(src.name)
-        lists[pname] = seen
+            seen[src.name] = None
+        lists[pname] = list(seen)
     return items, lists
 
 
@@ -217,7 +207,7 @@ def build_card_plan(conn: sqlite3.Connection, device_id: int, mount: Path, subpa
         on_card = (folder / name).is_file()
         if row is None and on_card:                # a file we did not put there
             theirs = folder / name
-            if theirs.stat().st_size == item.size and _sha(theirs) == _sha(item.src):
+            if theirs.stat().st_size == item.size and sha256_file(theirs) == sha256_file(item.src):
                 plan.adopted.append(item)          # the very same file: fine, just remember it
             else:
                 plan.conflicts.append(name)        # someone else's file: never overwritten
@@ -241,14 +231,6 @@ def build_card_plan(conn: sqlite3.Connection, device_id: int, mount: Path, subpa
 
 # ---- applying ---------------------------------------------------------------------------------------------------
 
-def _sha(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        while chunk := f.read(1 << 20):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def copy_verified(src: Path, folder: Path, filename: str) -> tuple[int, str]:
     """src -> folder/filename through a temp name: flush, fsync, size and checksum verified before the rename."""
     tmp = folder / f"{filename}{TMP_SUFFIX}"
@@ -260,12 +242,19 @@ def copy_verified(src: Path, folder: Path, filename: str) -> tuple[int, str]:
                 w.write(chunk)
             w.flush()
             os.fsync(w.fileno())
-        if tmp.stat().st_size != src.stat().st_size or _sha(tmp) != h.hexdigest():
+        if tmp.stat().st_size != src.stat().st_size or sha256_file(tmp) != h.hexdigest():
             raise OSError(f"{filename}: what was written does not match the source")
         os.replace(tmp, folder / filename)
     finally:
         tmp.unlink(missing_ok=True)
     return src.stat().st_size, h.hexdigest()
+
+
+def _record(conn: sqlite3.Connection, device_id: int, filename: str, video_id: str, size: int, sha: str,
+            mtime_ns: int) -> None:
+    """The manifest: exactly what runsync put on the card (video_id '' marks a playlist file)."""
+    conn.execute("INSERT OR REPLACE INTO device_tracks (device_id, filename, video_id, size, sha256, src_mtime_ns, "
+                 "synced_at) VALUES (?,?,?,?,?,?,?)", (device_id, filename, video_id, size, sha, mtime_ns, now_iso(precise=True)))
 
 
 def recover(conn: sqlite3.Connection, device_id: int, mount: Path, subpath: str) -> int:
@@ -277,7 +266,7 @@ def recover(conn: sqlite3.Connection, device_id: int, mount: Path, subpath: str)
             p.unlink(missing_ok=True)
             n += 1
     conn.execute("UPDATE card_runs SET status = 'interrupted', finished_at = ? WHERE device_id = ? AND status = 'running'",
-                 (_now(), device_id))
+                 (now_iso(precise=True), device_id))
     conn.commit()
     return n
 
@@ -317,9 +306,7 @@ def write_playlists(conn: sqlite3.Connection, device_id: int, folder: Path, plan
             os.replace(tmp, folder / pname)
         finally:
             tmp.unlink(missing_ok=True)
-        conn.execute("INSERT OR REPLACE INTO device_tracks (device_id, filename, video_id, size, sha256, src_mtime_ns, "
-                     "synced_at) VALUES (?,?,?,?,?,?,?)",
-                     (device_id, pname, "", len(data), hashlib.sha256(data).hexdigest(), 0, _now()))
+        _record(conn, device_id, pname, "", len(data), hashlib.sha256(data).hexdigest(), 0)
     conn.commit()
     return len(plan.playlists)
 
@@ -340,19 +327,15 @@ def apply_card_plan(conn: sqlite3.Connection, device_id: int, mount: Path, subpa
     folder.mkdir(parents=True, exist_ok=True)
     recover(conn, device_id, mount, subpath)
     run_id = conn.execute("INSERT INTO card_runs (device_id, started_at, status, plan_id) VALUES (?,?,'running',?)",
-                          (device_id, _now(), card_plan_id(plan))).lastrowid
+                          (device_id, now_iso(precise=True), card_plan_id(plan))).lastrowid
     conn.commit()
     res = ApplyResult()
     for it in plan.adopted:
-        conn.execute("INSERT OR REPLACE INTO device_tracks (device_id, filename, video_id, size, sha256, src_mtime_ns, "
-                     "synced_at) VALUES (?,?,?,?,?,?,?)",
-                     (device_id, it.filename, it.video_id, it.size, _sha(it.src), it.mtime_ns, _now()))
+        _record(conn, device_id, it.filename, it.video_id, it.size, sha256_file(it.src), it.mtime_ns)
     for op, items in (("add", plan.adds), ("update", plan.updates)):
         for it in items:
             size, sha = copy(it.src, folder, it.filename)
-            conn.execute("INSERT OR REPLACE INTO device_tracks (device_id, filename, video_id, size, sha256, "
-                         "src_mtime_ns, synced_at) VALUES (?,?,?,?,?,?,?)",
-                         (device_id, it.filename, it.video_id, size, sha, it.mtime_ns, _now()))
+            _record(conn, device_id, it.filename, it.video_id, size, sha, it.mtime_ns)
             conn.execute("INSERT INTO card_journal (run_id, op, video_id, filename, src, size) VALUES (?,?,?,?,?,?)",
                          (run_id, op, it.video_id, it.filename, str(it.src), size))
             conn.commit()
@@ -370,7 +353,9 @@ def apply_card_plan(conn: sqlite3.Connection, device_id: int, mount: Path, subpa
         conn.commit()
         res.removed += 1
     res.playlists = write_playlists(conn, device_id, folder, plan)
-    conn.execute("UPDATE card_runs SET status = 'done', finished_at = ? WHERE id = ?", (_now(), run_id))
+    conn.execute("UPDATE card_runs SET status = 'done', finished_at = ? WHERE id = ?", (now_iso(precise=True), run_id))
+    # the database keeps no history: the last run is all undo needs, older runs (and their journals) go
+    conn.execute("DELETE FROM card_runs WHERE device_id = ? AND id != ?", (device_id, run_id))
     conn.commit()
     return res
 
@@ -393,13 +378,11 @@ def undo_last_run(conn: sqlite3.Connection, device_id: int, mount: Path, subpath
         elif j["op"] == "remove" and j["src"] and Path(j["src"]).is_file():
             src = Path(j["src"])
             size, sha = copy_verified(src, folder, j["filename"])
-            conn.execute("INSERT OR REPLACE INTO device_tracks (device_id, filename, video_id, size, sha256, "
-                         "src_mtime_ns, synced_at) VALUES (?,?,?,?,?,?,?)",
-                         (device_id, j["filename"], j["video_id"], size, sha, src.stat().st_mtime_ns, _now()))
+            _record(conn, device_id, j["filename"], j["video_id"], size, sha, src.stat().st_mtime_ns)
             res.added += 1
             res.bytes += size
         conn.commit()
-    conn.execute("UPDATE card_runs SET status = 'undone', finished_at = ? WHERE id = ?", (_now(), run["id"]))
+    conn.execute("UPDATE card_runs SET status = 'undone', finished_at = ? WHERE id = ?", (now_iso(precise=True), run["id"]))
     conn.commit()
     if plan_after is not None:
         res.playlists = write_playlists(conn, device_id, folder, plan_after)

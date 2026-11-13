@@ -4,8 +4,9 @@ from __future__ import annotations
 import csv
 import json
 import sqlite3
-from datetime import UTC, datetime
 from pathlib import Path
+
+from ..util import now_iso
 
 LANGUAGES = ("hindi", "english", "punjabi")   # the only languages this library has
 TRACK_FIELDS = ("artist", "title", "album", "year", "language")
@@ -50,7 +51,7 @@ def save_override(conn: sqlite3.Connection, kind: str, name: str, fields: dict, 
         "source=excluded.source, evidence=excluded.evidence, confidence=excluded.confidence, "
         "updated_at=excluded.updated_at",
         (kind, name, json.dumps(merged, ensure_ascii=False), source, evidence, confidence,
-         datetime.now(UTC).isoformat(timespec="microseconds")))
+         now_iso(precise=True)))
     conn.commit()
     return True
 
